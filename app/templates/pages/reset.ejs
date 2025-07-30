@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reset Password - Cakradana</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background-color: #f8f9fa;
+            color: #333;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .container {
+            max-width: 520px;
+            margin: 20px;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .header {
+            padding: 40px 32px 32px;
+            text-align: center;
+            background: #2563eb;
+        }
+
+        .header h1 {
+            color: white;
+            margin: 0;
+            font-size: 24px;
+        }
+
+        .content {
+            padding: 32px;
+            text-align: center;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #1a1a1a;
+            font-weight: 500;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+            transition: border-color 0.2s;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #2563eb;
+        }
+
+        .error-message {
+            color: #dc2626;
+            font-size: 14px;
+            margin-top: 4px;
+            display: none;
+        }
+
+        .success-message {
+            color: #059669;
+            font-size: 14px;
+            margin-top: 4px;
+            display: none;
+        }
+
+        button {
+            background: #2563eb;
+            color: white;
+            border: none;
+            padding: 14px 28px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 16px;
+            cursor: pointer;
+            width: 100%;
+            transition: background-color 0.2s;
+        }
+
+        button:hover {
+            background: #1d4ed8;
+        }
+
+        button:disabled {
+            background: #93c5fd;
+            cursor: not-allowed;
+        }
+
+        .footer {
+            padding: 24px 32px;
+            background: #f8f9fa;
+            text-align: center;
+            border-top: 1px solid #eee;
+        }
+
+        .footer p {
+            margin: 0 0 8px;
+            color: #2563eb;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .footer .subtext {
+            margin: 0;
+            color: #999;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Cakradana</h1>
+        </div>
+        <div class="content">
+            <h2 style="margin: 0 0 16px; font-size: 22px; color: #1a1a1a; font-weight: 600;">
+                Reset Your Password
+            </h2>
+            <form id="resetForm" onsubmit="handleSubmit(event)">
+                <div class="form-group">
+                    <label for="password">New Password</label>
+                    <input type="password" id="password" name="password" required minlength="8">
+                    <div class="error-message" id="passwordError"></div>
+                </div>
+                <div class="form-group">
+                    <label for="confirmPassword">Confirm Password</label>
+                    <input type="password" id="confirmPassword" name="confirmPassword" required minlength="8">
+                    <div class="error-message" id="confirmPasswordError"></div>
+                </div>
+                <div class="success-message" id="successMessage"></div>
+                <button type="submit" id="submitButton">Reset Password</button>
+            </form>
+        </div>
+        <div class="footer">
+            <p>Cakradana</p>
+            <p class="subtext">Sistem AI untuk memantau dan mendeteksi risiko dalam pembiayaan pemilu</p>
+        </div>
+    </div>
+
+    <script>
+        const token = '<%= token %>';
+
+        if (!token) {
+            window.location.href = 'https://cakradana.org/';
+        }
+
+        function showError(elementId, message) {
+            const errorElement = document.getElementById(elementId);
+            errorElement.textContent = message;
+            errorElement.style.display = 'block';
+        }
+
+        function hideError(elementId) {
+            const errorElement = document.getElementById(elementId);
+            errorElement.style.display = 'none';
+        }
+
+        function showSuccess(message) {
+            const successElement = document.getElementById('successMessage');
+            successElement.textContent = message;
+            successElement.style.display = 'block';
+        }
+
+        async function handleSubmit(event) {
+            event.preventDefault();
+            
+            // Reset error messages
+            hideError('passwordError');
+            hideError('confirmPasswordError');
+            
+            const password = document.getElementById('password').value;
+            const confirmPassword = document.getElementById('confirmPassword').value;
+            
+            // Validate passwords
+            if (password.length < 8) {
+                showError('passwordError', 'Password must be at least 8 characters long');
+                return;
+            }
+            
+            if (password !== confirmPassword) {
+                showError('confirmPasswordError', 'Passwords do not match');
+                return;
+            }
+
+            // Disable submit button
+            const submitButton = document.getElementById('submitButton');
+            submitButton.disabled = true;
+            submitButton.textContent = 'Resetting Password...';
+
+            try {
+                const response = await fetch('/user/auth/email/change-password', {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        password,
+                        token
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showSuccess('Password has been reset successfully! Redirecting to homepage...');
+                    setTimeout(() => {
+                        window.location.href = 'https://cakradana.org/';
+                    }, 2000);
+                } else {
+                    showError('passwordError', data.message || 'Failed to reset password');
+                    submitButton.disabled = false;
+                    submitButton.textContent = 'Reset Password';
+                }
+            } catch (error) {
+                showError('passwordError', 'An error occurred. Please try again.');
+                submitButton.disabled = false;
+                submitButton.textContent = 'Reset Password';
+            }
+        }
+    </script>
+</body>
+</html>

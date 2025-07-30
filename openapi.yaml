@@ -1,0 +1,411 @@
+openapi: 3.0.0
+info:
+  title: Cakradana Core API
+  description: |
+    Cakradana adalah sistem berbasis AI untuk mendeteksi risiko dan meningkatkan transparansi pembiayaan pemilu melalui analisis real-time, OCR, web scraping, dan visualisasi jaringan donasi.
+    
+    ## Features
+    - User authentication with email and OAuth
+    - Digital form donation processing
+    - Paper form OCR processing  
+    - Web scraping capabilities
+    - Real-time risk detection and analysis
+  version: 1.0.0
+  contact:
+    name: Cakradana Development Team
+    email: dev@cakradana.org
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://api.cakradana.org
+    description: Production Server
+  - url: http://localhost:8080
+    description: Local Development Server
+
+security:
+  - BearerAuth: []
+
+paths:
+  /user/auth/email/login:
+    post:
+      tags:
+        - Authentication
+      summary: Email Login
+      description: Authenticate user with email and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              email: dev@cakradana.org
+              password: testtest
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /user/auth/email/register:
+    post:
+      tags:
+        - Authentication
+      summary: Email Registration
+      description: Register new user with email and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            example:
+              email: dev@cakradana.org
+              password: testtest
+      responses:
+        '200':
+          description: Registration successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Invalid input or user already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /user/auth/refresh-token:
+    get:
+      tags:
+        - Authentication
+      summary: Refresh Access Token
+      description: Refresh the user's access token using existing valid token
+      responses:
+        '200':
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /user/auth/email/forgot-password:
+    post:
+      tags:
+        - Authentication
+      summary: Request Password Reset
+      description: Send password reset email to user
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForgotPasswordRequest'
+            example:
+              email: dev@cakradana.org
+      responses:
+        '200':
+          description: Password reset email sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid email or user not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /user/auth/email/change-password:
+    put:
+      tags:
+        - Authentication
+      summary: Change Password
+      description: Change user password using reset token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+            example:
+              password: newpassword123
+              token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+      responses:
+        '200':
+          description: Password changed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid token or password requirements not met
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/digital-form/input:
+    post:
+      tags:
+        - Digital Form Services
+      summary: Add Digital Form Donations
+      description: |
+        Submit multiple donation records from digital forms. This endpoint processes 
+        donation data and automatically updates the entity network for risk analysis.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/DigitalFormDonation'
+            example:
+              - sender: "PT. Example Corp"
+                receiver: "Partai Politik A"
+                amount: 2000000
+                date: "2025-01-15"
+              - sender: "Yayasan Contoh"
+                receiver: "Calon Presiden B"
+                amount: 5000000
+                date: "2025-01-16"
+      responses:
+        '200':
+          description: Digital form donations processed successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          donations:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/DigitalFormDonation'
+        '400':
+          description: Invalid input data or user not registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT Bearer token authentication
+
+  schemas:
+    # Authentication Schemas
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          description: User's email address
+        password:
+          type: string
+          minLength: 6
+          description: User's password
+
+    RegisterRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          description: User's email address
+        password:
+          type: string
+          minLength: 6
+          description: User's password (minimum 6 characters)
+
+    ForgotPasswordRequest:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+          description: User's email address for password reset
+
+    ChangePasswordRequest:
+      type: object
+      required:
+        - password
+        - token
+      properties:
+        password:
+          type: string
+          minLength: 6
+          description: New password (minimum 6 characters)
+        token:
+          type: string
+          description: Password reset token received via email
+
+    # Digital Form Schemas
+    DigitalFormDonation:
+      type: object
+      required:
+        - sender
+        - receiver
+        - amount
+        - date
+      properties:
+        sender:
+          type: string
+          description: Name of the donation sender/donor
+          example: "PT. Example Corporation"
+        receiver:
+          type: string
+          description: Name of the donation receiver/recipient
+          example: "Partai Politik A"
+        amount:
+          type: number
+          minimum: 0
+          description: Donation amount in Indonesian Rupiah
+          example: 2000000
+        date:
+          type: string
+          format: date
+          description: Date of the donation (YYYY-MM-DD)
+          example: "2025-01-15"
+
+    # Response Schemas
+    AuthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [success]
+          example: success
+        message:
+          type: string
+          example: "Authentication successful"
+        data:
+          type: object
+          properties:
+            token:
+              type: string
+              description: JWT access token
+            user:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+
+    SuccessResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [success]
+          example: success
+        message:
+          type: string
+          description: Success message
+        data:
+          type: object
+          description: Response data (structure varies by endpoint)
+
+    ErrorResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [error]
+          example: error
+        message:
+          type: string
+          description: Error message
+          example: "Bad Request"
+        data:
+          type: object
+          description: Additional error details (usually empty)
+          example: {}
+
+tags:
+  - name: Authentication
+    description: User authentication and account management
+  - name: Digital Form Services
+    description: Digital form donation processing and analysis

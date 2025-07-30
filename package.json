@@ -1,0 +1,31 @@
+{
+  "name": "cakradana-api",
+  "version": "1.0.0",
+  "main": "app/index.js",
+  "scripts": {
+    "start": "node app/index.js",
+    "dev": "nodemon app/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cakradana-app/cakradana-api.git"
+  },
+  "author": "Cakradana Developers <dev@cakradana.org>",
+  "license": "MIT",
+  "description": "Cakradana adalah sistem berbasis AI untuk mendeteksi risiko dan meningkatkan transparansi pembiayaan pemilu melalui analisis real-time, OCR, web scraping, dan visualisasi jaringan donasi.",
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "body-parser": "^1.20.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "ejs": "^3.1.10",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.9.2",
+    "nodemailer": "^7.0.3",
+    "tesseract.js": "^6.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
