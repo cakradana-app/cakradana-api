@@ -9,12 +9,12 @@ const mailsender = require('../../../../utils/mail/sender');
 
 const register = async (req, res) => {
     try {
-        const { email, password } = req.body;
+        const { email, password, name, type } = req.body;
         
-        if (!email || !password) {
+        if (!email || !password || !name || !type) {
             return res.status(400).json({
                 status: 'error',
-                message: 'Parameter "email" and "password" required',
+                message: 'Parameter "email", "password", "name", and "type" required',
                 data: {}
             });
         }
@@ -31,14 +31,19 @@ const register = async (req, res) => {
 
         const newUser = new User({
             email: email,
-            password: await bcrypt.hash(password, 10)
+            password: await bcrypt.hash(password, 10),
+            name: name,
+            type: type
         });
         await newUser.save();
 
-        const newService = new Service({
-            email: email
-        });
-        await newService.save();
+        let getService = await Service.findOne();
+        if (!getService) {
+            getService = await Service.create({
+                entities: [],
+                donations: []
+            });
+        }
 
         const userTokenSign = {
             email: email

@@ -71,12 +71,11 @@ const input = async (req, res) => {
                 
                 // Save extracted donations to database
                 if (extractedDonations.length > 0) {
-                    const getService = await Service.findOne({ email: req.user.email });
+                    let getService = await Service.findOne();
                     if (!getService) {
-                        return res.status(400).json({
-                            status: 'error',
-                            message: "User is not registered yet",
-                            data: {}
+                        getService = await Service.create({
+                            entities: [],
+                            donations: []
                         });
                     } else {
                         // Add donations to the service

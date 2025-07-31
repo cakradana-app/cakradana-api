@@ -1,7 +1,6 @@
 const mongoose = require('mongoose');
 
 const serviceSchema = new mongoose.Schema({
-    email: { type: String, required: true },
     entities: [
         {
             name: { type: String, required: true, unique: true },
@@ -15,6 +14,8 @@ const serviceSchema = new mongoose.Schema({
             amount: { type: Number, required: false },
             date: { type: Date, required: false },
             type: { type: String, enum: ['digital-form', 'paper-form', 'web-scrape'], required: false },
+            senderConfirmed: { type: Boolean, default: false },
+            receiverConfirmed: { type: Boolean, default: false },
         }
     ],
 });

@@ -4,12 +4,11 @@ const input = async (req, res) => {
     try {
         const digitalForm = req.body;
         
-        const getService = await Service.findOne({ email: req.user.email });
+        let getService = await Service.findOne();
         if (!getService) {
-            return res.status(400).json({
-                status: 'error',
-                message: "User is not registered yet",
-                data: {}
+            getService = await Service.create({
+                entities: [],
+                donations: []
             });
         }
 
