@@ -36,6 +36,10 @@ app.get('/', function(req, res) {
   res.sendFile(path.join(__dirname, 'templates/pages/index.html'));
 });
 
+app.get('/test', function(req, res) {
+  res.sendFile(path.join(__dirname, 'templates/pages/test.html'));
+});
+
 // Route for reset password page
 app.get('/changepassword', function(req, res) {
   res.render('reset', { token: req.query.token });

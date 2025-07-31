@@ -15,20 +15,26 @@ const input = async (req, res) => {
 
         for (const form of digitalForm) {
             const newDonation = {
-                sender: form.sender,
-                receiver: form.receiver,
-                amount: form.amount,
-                date: form.date,
+                sender: form.sender || null,
+                receiver: form.receiver || null,
+                amount: form.amount || null,
+                date: form.date || null,
                 type: 'digital-form'
             };
             getService.donations.push(newDonation);
 
-            if (!getService.entities.includes(form.sender)) {
-                getService.entities.push(form.sender);
+            if (form.sender && !getService.entities.some(entity => entity.name === form.sender)) {
+                getService.entities.push({
+                    name: form.sender,
+                    type: form.sender_type || null
+                });
             }
 
-            if (!getService.entities.includes(form.receiver)) {
-                getService.entities.push(form.receiver);
+            if (form.receiver && !getService.entities.some(entity => entity.name === form.receiver)) {
+                getService.entities.push({
+                    name: form.receiver,
+                    type: form.receiver_type || null
+                });
             }
         }
 

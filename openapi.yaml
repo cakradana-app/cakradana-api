@@ -214,14 +214,18 @@ paths:
               items:
                 $ref: '#/components/schemas/DigitalFormDonation'
             example:
-              - sender: "PT. Example Corp"
-                receiver: "Partai Politik A"
+              - sender: "Orang A"
+                sender_type: "individual"
+                receiver: "Parpol B"
+                receiver_type: "political-party"
+                date: "2025-07-30"
                 amount: 2000000
-                date: "2025-01-15"
-              - sender: "Yayasan Contoh"
-                receiver: "Calon Presiden B"
-                amount: 5000000
-                date: "2025-01-16"
+              - sender: "Orang B"
+                sender_type: "individual"
+                receiver: "Parpol C"
+                receiver_type: "political-party"
+                date: "2025-07-30"
+                amount: 2000000
       responses:
         '200':
           description: Digital form donations processed successfully
@@ -241,6 +245,216 @@ paths:
                               $ref: '#/components/schemas/DigitalFormDonation'
         '400':
           description: Invalid input data or user not registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/paper-form/input:
+    post:
+      tags:
+        - Paper Form Services
+      summary: Process Paper Form Documents via OCR
+      description: |
+        Upload images of paper forms to extract donation data using OCR technology.
+        Supports multiple languages and automatically extracts donation information using AI.
+      parameters:
+        - in: query
+          name: lang
+          schema:
+            type: string
+            enum: [eng, ind]
+            default: ind
+          description: OCR language to use for text recognition
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                images:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  description: Images of paper forms to process
+              required:
+                - images
+      responses:
+        '200':
+          description: Paper forms processed successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      results:
+                        type: object
+                        properties:
+                          ocr:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/OCRResult'
+                          donations:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/ExtractedDonation'
+                      summary:
+                        $ref: '#/components/schemas/OCRSummary'
+        '400':
+          description: No images uploaded or user not registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: OCR processing error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/web-scrape/input:
+    post:
+      tags:
+        - Web Scraping Services
+      summary: Extract Donations from Web Pages
+      description: |
+        Scrape donation information from web pages using AI-powered content extraction.
+        Provides URL to scrape and returns extracted donation data.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebScrapeRequest'
+            example:
+              url: "https://example.com/donations-page"
+      responses:
+        '200':
+          description: Web scraping completed successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          url:
+                            type: string
+                            description: The URL that was scraped
+                          donations:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/ExtractedDonation'
+        '400':
+          description: Invalid URL, failed to fetch, or user not registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Web scraping error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/donations/list:
+    get:
+      tags:
+        - Donation Management
+      summary: Get User's Donations List
+      description: |
+        Retrieve all donations associated with the authenticated user.
+        Returns donations from all sources (digital forms, paper forms, web scraping).
+      responses:
+        '200':
+          description: Donations list retrieved successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/DonationRecord'
+        '400':
+          description: User not registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/donations/entities:
+    get:
+      tags:
+        - Donation Management
+      summary: Get User's Donation Entities
+      description: |
+        Retrieve all entities (senders and receivers) associated with the authenticated user's donations.
+        Useful for network analysis and risk detection.
+      responses:
+        '200':
+          description: Entities list retrieved successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/DonationEntity'
+        '400':
+          description: User not registered
           content:
             application/json:
               schema:
@@ -334,6 +548,51 @@ components:
         sender:
           type: string
           description: Name of the donation sender/donor
+          example: "Orang A"
+        sender_type:
+          type: string
+          description: Type/category of the sender entity
+          example: "individual"
+          enum: [individual, corporation, organization, political-party, government, other]
+        receiver:
+          type: string
+          description: Name of the donation receiver/recipient
+          example: "Parpol B"
+        receiver_type:
+          type: string
+          description: Type/category of the receiver entity
+          example: "political-party"
+          enum: [individual, corporation, organization, political-party, government, other]
+        amount:
+          type: number
+          minimum: 0
+          description: Donation amount in Indonesian Rupiah
+          example: 2000000
+        date:
+          type: string
+          format: date
+          description: Date of the donation (YYYY-MM-DD)
+          example: "2025-07-30"
+
+    # Web Scraping Schemas
+    WebScrapeRequest:
+      type: object
+      required:
+        - url
+      properties:
+        url:
+          type: string
+          format: uri
+          description: URL of the webpage to scrape for donation information
+          example: "https://example.com/donations-page"
+
+    # OCR and Extraction Schemas
+    ExtractedDonation:
+      type: object
+      properties:
+        sender:
+          type: string
+          description: Name of the donation sender/donor
           example: "PT. Example Corporation"
         receiver:
           type: string
@@ -349,6 +608,117 @@ components:
           format: date
           description: Date of the donation (YYYY-MM-DD)
           example: "2025-01-15"
+        sender_type:
+          type: string
+          nullable: true
+          description: Type/category of the sender entity
+          example: "corporation"
+        receiver_type:
+          type: string
+          nullable: true
+          description: Type/category of the receiver entity
+          example: "political-party"
+
+    OCRResult:
+      type: object
+      properties:
+        filename:
+          type: string
+          description: Original filename of the processed image
+          example: "donation_form_001.jpg"
+        mimetype:
+          type: string
+          description: MIME type of the processed image
+          example: "image/jpeg"
+        size:
+          type: integer
+          description: Size of the image file in bytes
+          example: 245760
+        text:
+          type: string
+          description: Extracted text from OCR processing
+          example: "Donation Receipt\nSender: PT ABC Corp\nReceiver: Political Party XYZ..."
+        language:
+          type: string
+          description: Language code used for OCR processing
+          example: "eng"
+        languageName:
+          type: string
+          description: Human-readable language name
+          example: "English"
+
+    OCRSummary:
+      type: object
+      properties:
+        totalImages:
+          type: integer
+          description: Total number of images processed
+          example: 3
+        language:
+          type: string
+          description: Language code used for OCR processing
+          example: "eng"
+        languageName:
+          type: string
+          description: Human-readable language name
+          example: "English"
+        totalTextExtracted:
+          type: integer
+          description: Total characters extracted from all images
+          example: 1247
+        donationsExtracted:
+          type: integer
+          description: Number of donations successfully extracted
+          example: 5
+        savedToDatabase:
+          type: boolean
+          description: Whether the extracted data was saved to database
+          example: true
+
+    # Donation Management Schemas
+    DonationRecord:
+      type: object
+      properties:
+        sender:
+          type: string
+          nullable: true
+          description: Name of the donation sender/donor
+          example: "PT. Example Corporation"
+        receiver:
+          type: string
+          nullable: true
+          description: Name of the donation receiver/recipient
+          example: "Partai Politik A"
+        amount:
+          type: number
+          nullable: true
+          minimum: 0
+          description: Donation amount in Indonesian Rupiah
+          example: 2000000
+        date:
+          type: string
+          nullable: true
+          format: date
+          description: Date of the donation (YYYY-MM-DD)
+          example: "2025-01-15"
+        type:
+          type: string
+          enum: [digital-form, paper-form, web-scrape]
+          description: Source type of the donation record
+          example: "digital-form"
+
+    DonationEntity:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Name of the entity (person, organization, etc.)
+          example: "PT. Example Corporation"
+        type:
+          type: string
+          nullable: true
+          description: Type/category of the entity
+          example: "corporation"
 
     # Response Schemas
     AuthResponse:
@@ -409,3 +779,9 @@ tags:
     description: User authentication and account management
   - name: Digital Form Services
     description: Digital form donation processing and analysis
+  - name: Paper Form Services
+    description: OCR processing of paper forms and donation extraction
+  - name: Web Scraping Services
+    description: Web scraping and AI-powered donation data extraction
+  - name: Donation Management
+    description: Donation and entity data retrieval and management
