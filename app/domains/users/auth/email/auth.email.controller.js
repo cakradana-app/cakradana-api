@@ -46,14 +46,18 @@ const register = async (req, res) => {
         }
 
         const userTokenSign = {
-            email: email
+            name: name,
+            email: email,
+            type: type
         }
         
         return res.status(200).json({
             status: 'success',
             message: "Email registration successful",
             data: {
+                name: name,
                 email: email,
+                type: type,
                 access_token: signToken(userTokenSign)
             }
         });
@@ -91,14 +95,17 @@ const login = async (req, res) => {
 
         if (bcrypt.compareSync(password, getUser.password)) {
             const userTokenSign = {
+                name: getUser.name,
                 email: email,
-                auth: "email",
+                type: getUser.type
             }
             return res.status(200).json({
                 status: 'success',
                 message: "Login Success",
                 data: {
+                    name: getUser.name,
                     email: email,
+                    type: getUser.type,
                     access_token: signToken(userTokenSign)
                 }
             });

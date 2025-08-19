@@ -281,7 +281,21 @@ OPENROUTER_API_MODEL=deepseek/deepseek-r1-distill-qwen-7b
 POST /user/auth/email/register
 {
   "email": "user@example.com",
-  "password": "password123"
+  "password": "password123",
+  "name": "User Name",
+  "type": "individual"
+}
+
+// Response:
+{
+  "status": "success",
+  "message": "Email registration successful",
+  "data": {
+    "name": "User Name",
+    "email": "user@example.com",
+    "type": "individual",
+    "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  }
 }
 
 // Login
@@ -289,6 +303,18 @@ POST /user/auth/email/login
 {
   "email": "user@example.com", 
   "password": "password123"
+}
+
+// Response:
+{
+  "status": "success",
+  "message": "Login Success",
+  "data": {
+    "name": "User Name",
+    "email": "user@example.com",
+    "type": "individual",
+    "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  }
 }
 ```
 

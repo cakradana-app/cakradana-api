@@ -710,7 +710,7 @@ components:
           type: string
           description: Type/category of the user entity
           example: "political-party"
-          enum: [individual, corporation, organization, political-party, government, other]
+          enum: [individual, corporation, organization, political-party, government, kpu, other]
 
     ForgotPasswordRequest:
       type: object
@@ -753,7 +753,7 @@ components:
           type: string
           description: Type/category of the sender entity
           example: "individual"
-          enum: [individual, corporation, organization, political-party, government, other]
+          enum: [individual, corporation, organization, political-party, government, kpu, other]
         receiver:
           type: string
           description: Name of the donation receiver/recipient
@@ -762,7 +762,7 @@ components:
           type: string
           description: Type/category of the receiver entity
           example: "political-party"
-          enum: [individual, corporation, organization, political-party, government, other]
+          enum: [individual, corporation, organization, political-party, government, kpu, other]
         amount:
           type: number
           minimum: 0
@@ -962,9 +962,19 @@ components:
             user:
               type: object
               properties:
+                name:
+                  type: string
+                  description: User's full name or organization name
+                  example: "Developer User"
                 email:
                   type: string
                   format: email
+                  example: "dev@cakradana.org"
+                type:
+                  type: string
+                  description: Type/category of the user entity
+                  example: "individual"
+                  enum: [individual, corporation, organization, political-party, government, kpu, other]
 
     SuccessResponse:
       type: object
