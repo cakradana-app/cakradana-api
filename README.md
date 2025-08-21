@@ -4,7 +4,7 @@
 
 ![Cakradana Logo](assets/logo.png)
 
-**Sistem AI untuk Transparansi Pembiayaan Pemilu Indonesia**
+> **Empowering Clean & Transparent Elections with AI-Powered AML Detection**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
@@ -15,93 +15,93 @@
 
 ---
 
-## 📋 Daftar Isi
+## 📋 Table of Contents
 
-- [🎯 Tentang Cakradana](#-tentang-cakradana)
-- [❌ Masalah yang Dipecahkan](#-masalah-yang-dipecahkan)
-- [✅ Solusi Cakradana](#-solusi-cakradana)
-- [🚀 Fitur Utama](#-fitur-utama)
+- [🎯 About Cakradana](#-about-cakradana)
+- [❌ Problems Solved](#-problems-solved)
+- [✅ Cakradana Solution](#-cakradana-solution)
+- [🚀 Key Features](#-key-features)
 - [🛠️ Tech Stack](#️-tech-stack)
 - [⚡ Quick Start](#-quick-start)
 - [📚 API Documentation](#-api-documentation)
-- [🔧 Instalasi](#-instalasi)
+- [🔧 Installation](#-installation)
 - [🌍 Environment Variables](#-environment-variables)
-- [📖 Cara Penggunaan](#-cara-penggunaan)
-- [🤝 Kontribusi](#-kontribusi)
-- [📄 Lisensi](#-lisensi)
+- [📖 How to Use](#-how-to-use)
+- [🤝 Contributing](#-contributing)
+- [📄 License](#-license)
 
 ---
 
-## 🎯 Tentang Cakradana
+## 🎯 About Cakradana
 
-**Cakradana** adalah sistem berbasis kecerdasan buatan (AI) yang dirancang khusus untuk meningkatkan transparansi dan mendeteksi risiko dalam pembiayaan pemilu di Indonesia. Platform ini menggunakan teknologi canggih untuk menganalisis, memproses, dan memvisualisasikan data donasi politik secara real-time.
+**Cakradana** is an artificial intelligence (AI) system specifically designed to enhance transparency and detect risks in election financing in Indonesia. This platform uses advanced technology to analyze, process, and visualize political donation data in real-time.
 
-Nama "Cakradana" diambil dari bahasa Sanskerta yang berarti "roda pemberian" - melambangkan siklus transparansi dalam sistem demokrasi yang sehat.
-
----
-
-## ❌ Masalah yang Dipecahkan
-
-### 🔍 Kurangnya Transparansi
-- **Donasi politik yang tidak terlacak** dengan baik oleh sistem konvensional
-- **Sulitnya mengakses informasi** pembiayaan kampanye secara real-time
-- **Keterbatasan dalam menganalisis pola** donasi yang kompleks
-
-### 📊 Fragmentasi Data
-- **Data donasi tersebar** di berbagai format (digital, kertas, website)
-- **Proses manual yang lambat** dalam pengumpulan dan verifikasi data
-- **Kesulitan dalam mengidentifikasi jaringan** dan koneksi antar entitas
-
-### 🚨 Risiko Korupsi & Money Politics
-- **Deteksi dini yang lemah** terhadap pola donasi mencurigakan
-- **Kurangnya analisis jaringan** untuk mengidentifikasi potensi konflik kepentingan
-- **Minimnya tools otomatis** untuk monitoring pembiayaan kampanye
+The name "Cakradana" is derived from Sanskrit meaning "wheel of giving" - symbolizing the cycle of transparency in a healthy democratic system.
 
 ---
 
-## ✅ Solusi Cakradana
+## ❌ Problems Solved
 
-### 🤖 Teknologi AI & Machine Learning
-Cakradana menggunakan AI untuk:
-- **Ekstraksi otomatis** data donasi dari berbagai sumber
-- **Analisis pola** dan deteksi anomali dalam pembiayaan
-- **Prediksi risiko** berdasarkan historical data dan network analysis
+### 🔍 Lack of Transparency
+- **Untraceable political donations** by conventional systems
+- **Difficulty accessing information** about campaign financing in real-time
+- **Limitations in analyzing complex** donation patterns
 
-### 🔄 Integrasi Multi-Channel
-Platform ini menyatukan data dari:
-- **📱 Form Digital** - Input manual melalui API
-- **📄 Dokumen Fisik** - OCR untuk ekstraksi data dari scan dokumen
-- **🌐 Web Scraping** - Otomatis mengumpulkan data dari website publik
+### 📊 Data Fragmentation
+- **Donation data scattered** across various formats (digital, paper, website)
+- **Slow manual processes** in data collection and verification
+- **Difficulty identifying networks** and connections between entities
 
-### 📈 Visualisasi & Analytics
-- **Real-time dashboard** untuk monitoring donasi
-- **Network visualization** untuk melihat koneksi antar entitas
-- **Risk scoring** otomatis berdasarkan berbagai parameter
-- **Laporan komprehensif** dalam format yang mudah dipahami
+### 🚨 Corruption & Money Politics Risk
+- **Weak early detection** of suspicious donation patterns
+- **Lack of network analysis** to identify potential conflicts of interest
+- **Minimal automated tools** for monitoring campaign financing
 
 ---
 
-## 🚀 Fitur Utama
+## ✅ Cakradana Solution
 
-### 🔐 Autentikasi & Keamanan
-- **JWT-based authentication** untuk akses yang aman
-- **Email verification** dan password reset
-- **Role-based access control** untuk berbagai tingkat pengguna
+### 🤖 AI & Machine Learning Technology
+Cakradana uses AI for:
+- **Automatic extraction** of donation data from various sources
+- **Pattern analysis** and anomaly detection in financing
+- **Risk prediction** based on historical data and network analysis
 
-### 📊 Input Data Multi-Format
-- **Digital Form Processing** - API endpoint untuk input data terstruktur
-- **OCR Document Processing** - Ekstraksi data dari scan dokumen (mendukung bahasa Indonesia & Inggris)
-- **Web Scraping** - Otomatis mengumpulkan data dari halaman web publik
+### 🔄 Multi-Channel Integration
+This platform unifies data from:
+- **📱 Digital Forms** - Manual input via API
+- **📄 Physical Documents** - OCR for data extraction from scanned documents
+- **🌐 Web Scraping** - Automatically collecting data from public websites
+
+### 📈 Visualization & Analytics
+- **Real-time dashboard** for donation monitoring
+- **Network visualization** to see connections between entities
+- **Automatic risk scoring** based on various parameters
+- **Comprehensive reports** in easily understandable formats
+
+---
+
+## 🚀 Key Features
+
+### 🔐 Authentication & Security
+- **JWT-based authentication** for secure access
+- **Email verification** and password reset
+- **Role-based access control** for various user levels
+
+### 📊 Multi-Format Data Input
+- **Digital Form Processing** - API endpoint for structured data input
+- **OCR Document Processing** - Data extraction from scanned documents (supports Indonesian & English)
+- **Web Scraping** - Automatically collecting data from public web pages
 
 ### 🕸️ Network Analysis
-- **Entity Management** - Tracking donor, penerima, dan entitas terkait
-- **Relationship Mapping** - Visualisasi hubungan antar entitas
-- **Risk Detection** - Identifikasi pola donasi yang mencurigakan
+- **Entity Management** - Tracking donors, recipients, and related entities
+- **Relationship Mapping** - Visualization of relationships between entities
+- **Risk Detection** - Identification of suspicious donation patterns
 
 ### 📱 RESTful API
-- **OpenAPI 3.0 Documentation** - Dokumentasi lengkap dan interaktif
+- **OpenAPI 3.0 Documentation** - Complete and interactive documentation
 - **Postman Collection** - Ready-to-use API testing
-- **CORS Support** - Cross-origin resource sharing untuk frontend integration
+- **CORS Support** - Cross-origin resource sharing for frontend integration
 
 ---
 
@@ -114,8 +114,8 @@ Platform ini menyatukan data dari:
 - **CORS** - Cross-origin resource sharing
 
 ### 🗄️ Database & Storage
-- **MongoDB** `8.9+` - NoSQL database dengan Mongoose ODM
-- **Cloudflare R2** - Object storage untuk file handling
+- **MongoDB** `8.9+` - NoSQL database with Mongoose ODM
+- **Cloudflare R2** - Object storage for file handling
 
 ### 🔒 Authentication & Security
 - **JSON Web Token (JWT)** - Stateless authentication
@@ -124,12 +124,12 @@ Platform ini menyatukan data dari:
 
 ### 🤖 AI & Data Processing
 - **Tesseract.js** `6.0+` - OCR (Optical Character Recognition)
-- **Cheerio** `1.1+` - Server-side HTML parsing untuk web scraping
-- **OpenRouter API** - LLM integration untuk natural language processing
+- **Cheerio** `1.1+` - Server-side HTML parsing for web scraping
+- **OpenRouter API** - LLM integration for natural language processing
 
 ### 📧 Communication
 - **Nodemailer** `7.0+` - Email service integration
-- **EJS** `3.1+` - Template engine untuk email dan web pages
+- **EJS** `3.1+` - Template engine for email and web pages
 
 ### 🛠️ Development Tools
 - **Multer** - File upload handling
@@ -137,21 +137,21 @@ Platform ini menyatukan data dari:
 - **Nodemon** - Development auto-restart
 
 ### 🐳 Deployment
-- **Docker** - Containerization dengan compose.yml
+- **Docker** - Containerization with compose.yml
 - **Linux** - Production environment support
 
 ---
 
 ## ⚡ Quick Start
 
-### Prasyarat
+### Prerequisites
 ```bash
 Node.js >= 18.0.0
 MongoDB >= 8.9.0
-npm atau yarn
+npm or yarn
 ```
 
-### Instalasi Cepat
+### Quick Installation
 ```bash
 # Clone repository
 git clone https://github.com/cakradana-app/cakradana-api.git
@@ -162,9 +162,9 @@ npm install
 
 # Setup environment variables
 cp .env.example .env
-# Edit .env dengan konfigurasi Anda
+# Edit .env with your configuration
 
-# Jalankan development server
+# Run development server
 npm run dev
 ```
 
@@ -172,36 +172,31 @@ npm run dev
 
 ## 📚 API Documentation
 
-### 🔗 Endpoint Utama
+### 🔗 Main Endpoints
 
 #### Authentication
-- `POST /user/auth/email/login` - Login dengan email
-- `POST /user/auth/email/register` - Registrasi pengguna baru
+- `POST /user/auth/email/login` - Login with email
+- `POST /user/auth/email/register` - Register new user
 - `GET /user/auth/refresh-token` - Refresh access token
 - `POST /user/auth/email/forgot-password` - Reset password
-- `PUT /user/auth/email/change-password` - Ubah password
+- `PUT /user/auth/email/change-password` - Change password
 
 #### Digital Form Services
-- `POST /service/digital-form/input` - Input data donasi manual
+- `POST /service/digital-form/input` - Manual donation data input
 
 #### Paper Form Services
-- `POST /service/paper-form/input` - Upload dan proses dokumen fisik via OCR
+- `POST /service/paper-form/input` - Upload and process physical documents via OCR
 
 #### Web Scraping Services
-- `POST /service/web-scrape/input` - Scraping data dari website
+- `POST /service/web-scrape/input` - Scrape data from websites
 
 #### Donation Management
-- `GET /service/donations/list` - Daftar semua donasi user
-- `GET /service/donations/entities` - Daftar entitas (donor/penerima)
-
-### 📋 Import Postman Collection
-```bash
-# Import file postman.json ke Postman untuk testing API
-```
+- `GET /service/donations/list` - List all user donations
+- `GET /service/donations/entities` - List entities (donors/recipients)
 
 ---
 
-## 🔧 Instalasi
+## 🔧 Installation
 
 ### 1. Clone Repository
 ```bash
@@ -216,21 +211,21 @@ npm install
 
 ### 3. Setup Database
 ```bash
-# Pastikan MongoDB berjalan
+# Ensure MongoDB is running
 sudo systemctl start mongod
 
-# Atau menggunakan Docker
+# Or using Docker
 docker run -d -p 27017:27017 --name mongodb mongo:latest
 ```
 
 ### 4. Setup OCR Language Data
 ```bash
-# Download language data untuk Tesseract.js (sudah disediakan)
+# Download language data for Tesseract.js (already provided)
 # eng.traineddata - English
 # ind.traineddata - Indonesian
 ```
 
-### 5. Jalankan Aplikasi
+### 5. Run Application
 ```bash
 # Development
 npm run dev
@@ -243,7 +238,7 @@ npm start
 
 ## 🌍 Environment Variables
 
-Buat file `.env` di root directory dengan konfigurasi berikut:
+Create a `.env` file in the root directory with the following configuration:
 
 ```env
 # Server Configuration
@@ -265,7 +260,7 @@ EMAIL_SSL=true
 EMAIL_USER=
 EMAIL_PASS=
 
-# OpenRouter API (untuk LLM)
+# OpenRouter API (for LLM)
 OPENROUTER_API_URL=https://openrouter.ai/api/v1/chat/completions
 OPENROUTER_API_KEY=
 OPENROUTER_API_MODEL=deepseek/deepseek-r1-distill-qwen-7b
@@ -273,11 +268,11 @@ OPENROUTER_API_MODEL=deepseek/deepseek-r1-distill-qwen-7b
 
 ---
 
-## 📖 Cara Penggunaan
+## 📖 How to Use
 
-### 1. Registrasi & Login
+### 1. Registration & Login
 ```javascript
-// Registrasi pengguna baru
+// Register new user
 POST /user/auth/email/register
 {
   "email": "user@example.com",
@@ -318,23 +313,23 @@ POST /user/auth/email/login
 }
 ```
 
-### 2. Input Data Donasi Digital
+### 2. Input Digital Donation Data
 ```javascript
 POST /service/digital-form/input
 Authorization: Bearer YOUR_JWT_TOKEN
 [
   {
-    "sender": "Orang A",
+    "sender": "Person A",
     "sender_type": "individual",
-    "receiver": "Parpol B",
+    "receiver": "Party B",
     "receiver_type": "political-party",
     "date": "2025-07-30",
     "amount": 2000000
   },
   {
-    "sender": "Orang B",
+    "sender": "Person B",
     "sender_type": "individual", 
-    "receiver": "Parpol C",
+    "receiver": "Party C",
     "receiver_type": "political-party",
     "date": "2025-07-30",
     "amount": 2000000
@@ -342,13 +337,13 @@ Authorization: Bearer YOUR_JWT_TOKEN
 ]
 ```
 
-### 3. Proses Dokumen OCR
+### 3. Process OCR Documents
 ```javascript
 POST /service/paper-form/input?lang=ind
 Authorization: Bearer YOUR_JWT_TOKEN
 Content-Type: multipart/form-data
 
-// Upload file gambar dokumen donasi
+// Upload image files of donation documents
 images: [file1.jpg, file2.png]
 ```
 
@@ -361,56 +356,50 @@ Authorization: Bearer YOUR_JWT_TOKEN
 }
 ```
 
-### 5. Ambil Data Donasi
+### 5. Retrieve Donation Data
 ```javascript
-// Semua donasi
+// All donations
 GET /service/donations/list
 Authorization: Bearer YOUR_JWT_TOKEN
 
-// Semua entitas
+// All entities
 GET /service/donations/entities
 Authorization: Bearer YOUR_JWT_TOKEN
 ```
 
 ---
 
-## 🤝 Kontribusi
+## 🤝 Contributing
 
-Kami menyambut kontribusi dari komunitas! Berikut cara berkontribusi:
+We welcome contributions from the community! Here's how to contribute:
 
-### 🐛 Melaporkan Bug
-1. Buka [Issues](https://github.com/cakradana-app/cakradana-api/issues)
-2. Gunakan template bug report
-3. Sertakan detail sistem dan langkah reproduksi
+### 🐛 Reporting Bugs
+1. Open [Issues](https://github.com/cakradana-app/cakradana-api/issues)
+2. Use the bug report template
+3. Include system details and reproduction steps
 
-### 💡 Fitur Baru
-1. Fork repository ini
-2. Buat branch baru (`git checkout -b feature/AmazingFeature`)
-3. Commit perubahan (`git commit -m 'Add some AmazingFeature'`)
-4. Push ke branch (`git push origin feature/AmazingFeature`)
-5. Buat Pull Request
+### 💡 New Features
+1. Fork this repository
+2. Create a new branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Create a Pull Request
 
-### 📝 Dokumentasi
-- Perbaiki typo atau tambahkan penjelasan
-- Tambahkan contoh penggunaan
-- Terjemahkan ke bahasa lain
-
----
-
-## 📄 Lisensi
-
-Proyek ini dilisensikan di bawah [MIT License](LICENSE) - lihat file LICENSE untuk detail lengkap.
+### 📝 Documentation
+- Fix typos or add explanations
+- Add usage examples
+- Translate to other languages
 
 ---
 
 <div align="center">
 
-**Dibuat dengan ❤️ oleh Tim Cakradana**
+**Made with ❤️ by the Cakradana Team**
 
-[🌐 Website](https://cakradana.org) | [📧 Email](mailto:dev@cakradana.org) | [📝 Dokumentasi API](https://api.cakradana.org)
+[🌐 Website](https://cakradana.org) | [📧 Email](mailto:dev@cakradana.org) | [📝 API Documentation](https://api.cakradana.org)
 
 ---
 
-© 2025 Cakradana. Membangun demokrasi yang lebih transparan melalui teknologi.
+© 2025 Cakradana. Building a more transparent democracy through technology.
 
 </div>
