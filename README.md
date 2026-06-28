@@ -413,7 +413,7 @@ We welcome contributions from the community! Here's how to contribute:
 
 **Made with ❤️ by the Cakradana Team**
 
-[🌐 Website](https://cakradana.org) | [📧 Email](mailto:dev@cakradana.org) | [📝 API Documentation](https://api.cakradana.org)
+[🌐 Website](https://cakradana.faizath.com) | [📧 Email](mailto:dev@cakradana.faizath.com) | [📝 API Documentation](https://cakradana-api.faizath.com)
 
 ---
 
