@@ -19,7 +19,7 @@ info:
     url: https://opensource.org/licenses/MIT
 
 servers:
-  - url: https://api.cakradana.org
+  - url: https://cakradana-api.faizath.com
     description: Production Server
   - url: http://localhost:8080
     description: Local Development Server
