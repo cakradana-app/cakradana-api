@@ -155,11 +155,11 @@ const forgot = async (req, res) => {
 
         
         const html = await mailrenderer('reset', {
-            reset_url: `https://api.cakradana.org/changepassword?token=${encodeURIComponent(verificationToken)}`
+            reset_url: `https://cakradana-api.faizath.com/changepassword?token=${encodeURIComponent(verificationToken)}`
         });
 
         await mailsender.sendmail({
-            fromaddres: 'Cakradana <noreply@cakradana.org>',
+            fromaddres: 'Cakradana <cakradana@mail.faizath.com>',
             receipients: email,
             subject: 'Password Reset for Cakradana',
             message: html,

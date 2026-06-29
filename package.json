@@ -10,7 +10,7 @@
     "type": "git",
     "url": "https://github.com/cakradana-app/cakradana-api.git"
   },
-  "author": "Cakradana Developers <dev@cakradana.org>",
+  "author": "Cakradana Developers <dev@cakradana.faizath.com>",
   "license": "MIT",
   "description": "Cakradana adalah sistem berbasis AI untuk mendeteksi risiko dan meningkatkan transparansi pembiayaan pemilu melalui analisis real-time, OCR, web scraping, dan visualisasi jaringan donasi.",
   "dependencies": {

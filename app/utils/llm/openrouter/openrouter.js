@@ -75,7 +75,7 @@ ${text}`;
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-                'HTTP-Referer': 'https://api.cakradana.org',
+                'HTTP-Referer': 'https://cakradana-api.faizath.com',
                 'X-Title': 'Cakradana, Sistem AI untuk memantau dan mendeteksi risiko dalam pembiayaan pemilu',
             },
             body: JSON.stringify(requestBody),

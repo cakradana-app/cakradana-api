@@ -164,7 +164,7 @@
         const token = '<%= token %>';
 
         if (!token) {
-            window.location.href = 'https://cakradana.org/';
+            window.location.href = 'https://cakradana.faizath.com/';
         }
 
         function showError(elementId, message) {
@@ -227,7 +227,7 @@
                 if (response.ok) {
                     showSuccess('Password has been reset successfully! Redirecting to homepage...');
                     setTimeout(() => {
-                        window.location.href = 'https://cakradana.org/';
+                        window.location.href = 'https://cakradana.faizath.com/';
                     }, 2000);
                 } else {
                     showError('passwordError', data.message || 'Failed to reset password');
