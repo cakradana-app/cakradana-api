@@ -1,184 +1,139 @@
 const { createWorker } = require('tesseract.js');
+
 const tesseractConfig = require('../../../configs/ocr/tesseract.config');
-const { extractDonations } = require('../../../utils/llm/openrouter/openrouter');
-const Service = require('../services.model').Service;
+const { extractDonations } = require('../../../utils/llm/extraction');
+const { candidatesFromExtraction, ingestBatch } = require('../../canonical/ingest');
+const { Donation } = require('../../canonical/canonical.model');
+const scoring = require('../../../utils/scoring/client');
+
+/**
+ * OCR confidence below which a page's text is treated as unreliable.
+ *
+ * A badly scanned page yields plausible-looking words that were never on it.
+ * Extracting donations from that produces attributions to people the document
+ * does not name, which is the one failure this pipeline must not make quietly.
+ */
+const MIN_PAGE_CONFIDENCE = 40;
 
 const input = async (req, res) => {
     try {
-        // Check if files were uploaded
         if (!req.files || req.files.length === 0) {
             return res.status(400).json({
-                success: false,
-                message: 'No images were uploaded'
+                status: 'error',
+                message: 'No images were uploaded',
+                data: {},
             });
         }
 
-        // Get language from query parameter or use default
-        const language = req.query.lang && tesseractConfig.availableLanguages[req.query.lang] 
-            ? req.query.lang 
-            : tesseractConfig.defaultLanguage;
+        const language =
+            req.query.lang && tesseractConfig.availableLanguages[req.query.lang]
+                ? req.query.lang
+                : tesseractConfig.defaultLanguage;
 
-        console.log(`Processing ${req.files.length} images for OCR using language: ${language}...`);
-
-        // Array to store OCR results
-        const ocrResults = [];
-
-        // Create a Tesseract worker with custom configuration
+        const pages = [];
         const worker = await createWorker(language, 1, {
             langPath: tesseractConfig.langPath,
-            ...tesseractConfig.workerOptions
+            ...tesseractConfig.workerOptions,
         });
 
         try {
-            // Process each uploaded image
-            for (let i = 0; i < req.files.length; i++) {
-                const file = req.files[i];
-                
-                console.log(`Processing image ${i + 1}/${req.files.length}: ${file.originalname}`);
-
-                // Perform OCR on the image buffer
-                const { data: { text } } = await worker.recognize(file.buffer);
-                
-                // Store the result
-                ocrResults.push({
+            for (const file of req.files) {
+                const { data } = await worker.recognize(file.buffer);
+                pages.push({
                     filename: file.originalname,
                     mimetype: file.mimetype,
                     size: file.size,
-                    text: text.trim(),
-                    language: language,
-                    languageName: tesseractConfig.availableLanguages[language]
+                    text: (data.text || '').trim(),
+                    confidence: typeof data.confidence === 'number' ? data.confidence : null,
+                    language,
+                    languageName: tesseractConfig.availableLanguages[language],
                 });
-
-                console.log(`Completed OCR for: ${file.originalname}`);
             }
         } finally {
-            // Always terminate the worker to free memory
             await worker.terminate();
         }
 
-        // Combine all extracted text for donation extraction
-        const combinedText = ocrResults.map(result => result.text).join('\n\n');
-        
-        let extractedDonations = [];
-        let extractionError = null;
-        
-        // Extract donations using OpenRouter LLM if there's text content
-        if (combinedText.trim().length > 0) {
-            try {
-                console.log('Extracting donation information using OpenRouter LLM...');
-                extractedDonations = await extractDonations(combinedText);
-                console.log(`Successfully extracted ${extractedDonations.length} donations`);
-                
-                // Save extracted donations to database
-                if (extractedDonations.length > 0) {
-                    let getService = await Service.findOne();
-                    if (!getService) {
-                        getService = await Service.create({
-                            entities: [],
-                            donations: []
-                        });
-                    } else {
-                        // Add donations to the service
-                        console.log('Extracted donations:', extractedDonations);
-                        console.log('Current entities before adding:', getService.entities);
-                        
-                        for (const donation of extractedDonations) {
-                            console.log('Processing donation:', donation);
-                            
-                            const newDonation = {
-                                sender: donation.sender || null,
-                                receiver: donation.receiver || null,
-                                amount: donation.amount || null,
-                                date: donation.date || null,
-                                type: 'paper-form'
-                            };
-                            getService.donations.push(newDonation);
+        const usable = pages.filter(
+            (page) =>
+                page.text.length > 0 &&
+                (page.confidence === null || page.confidence >= MIN_PAGE_CONFIDENCE),
+        );
+        const unreadable = pages.filter((page) => !usable.includes(page));
 
-                            // Add entities if they don't exist
-                            if (donation.sender && typeof donation.sender === 'string' && donation.sender.trim() !== '') {
-                                const senderExists = getService.entities.some(entity => entity.name === donation.sender);
-                                console.log(`Sender "${donation.sender}" exists:`, senderExists);
-                                
-                                if (!senderExists) {
-                                    const newSenderEntity = {
-                                        name: donation.sender.trim(),
-                                        type: donation.sender_type || null
-                                    };
-                                    console.log('Adding sender entity:', newSenderEntity);
-                                    getService.entities.push(newSenderEntity);
-                                }
-                            } else if (donation.sender) {
-                                console.warn('Invalid sender data:', donation.sender);
-                            }
-
-                            if (donation.receiver && typeof donation.receiver === 'string' && donation.receiver.trim() !== '') {
-                                const receiverExists = getService.entities.some(entity => entity.name === donation.receiver);
-                                console.log(`Receiver "${donation.receiver}" exists:`, receiverExists);
-                                
-                                if (!receiverExists) {
-                                    const newReceiverEntity = {
-                                        name: donation.receiver.trim(),
-                                        type: donation.receiver_type || null
-                                    };
-                                    console.log('Adding receiver entity:', newReceiverEntity);
-                                    getService.entities.push(newReceiverEntity);
-                                }
-                            } else if (donation.receiver) {
-                                console.warn('Invalid receiver data:', donation.receiver);
-                            }
-                        }
-                        
-                        console.log('Final entities before save:', getService.entities);
-                        
-                        // Filter out any invalid entities before saving
-                        getService.entities = getService.entities.filter(entity => 
-                            entity.name && typeof entity.name === 'string' && entity.name.trim() !== ''
-                        );
-                        console.log('Entities after filtering:', getService.entities);
-                        
-                        await getService.save();
-                        console.log('Successfully saved extracted donations to database');
-                    }
-                }
-            } catch (error) {
-                console.error('Error extracting donations:', error);
-                return res.status(500).json({
-                    success: false,
-                    message: 'Error extracting donations',
-                    error: error.message
-                });
-            }
+        // Pages are extracted separately so a donation can be traced back to
+        // the page it was read from. Concatenating them first would leave a
+        // finding pointing at a document rather than at a place in it, which
+        // is not something a subject can check.
+        const extractions = [];
+        for (const page of usable) {
+            const extraction = await extractDonations(page.text);
+            extractions.push({ page, extraction });
         }
 
-        // Return comprehensive results
-        return res.status(200).json({
-            success: true,
-            message: `Successfully processed ${req.files.length} images using ${tesseractConfig.availableLanguages[language]} OCR${extractedDonations.length > 0 ? ` and extracted ${extractedDonations.length} donations` : ''}`,
-            results: {
-                ocr: ocrResults,
-                donations: extractedDonations
-            },
-            summary: {
-                totalImages: req.files.length,
-                language: language,
-                languageName: tesseractConfig.availableLanguages[language],
-                totalTextExtracted: ocrResults.reduce((total, result) => total + result.text.length, 0),
-                donationsExtracted: extractedDonations.length,
-                savedToDatabase: extractedDonations.length > 0 && !extractionError
-            }
-        });
+        const candidates = extractions.flatMap(({ page, extraction }) =>
+            candidatesFromExtraction(extraction, {
+                channel: 'paper-form',
+                sourceReference: page.filename,
+                retrievedAt: new Date(),
+            }),
+        );
 
+        const summary = await ingestBatch(candidates);
+
+        const stored = await Donation.find({
+            _id: {
+                $in: summary.results
+                    .filter((r) => r.status === 'ingested')
+                    .map((r) => r.donationId),
+            },
+        });
+        const scored = await scoring.scoreMany(stored, { requestId: `paper-${Date.now()}` });
+
+        return res.status(200).json({
+            status: 'success',
+            message:
+                `Processed ${pages.length} image(s) and ingested ${summary.ingested} donation(s)`,
+            data: {
+                ocr: pages.map(({ filename, confidence, text, languageName }) => ({
+                    filename,
+                    confidence,
+                    languageName,
+                    characters: text.length,
+                })),
+                // Named rather than counted, so an operator can see which
+                // uploads produced nothing and re-scan them.
+                unreadable: unreadable.map((page) => ({
+                    filename: page.filename,
+                    confidence: page.confidence,
+                    reason:
+                        page.text.length === 0
+                            ? 'no text could be read from this image'
+                            : `OCR confidence ${page.confidence} is too low to extract from`,
+                })),
+                extracted: extractions.reduce((n, e) => n + e.extraction.donations.length, 0),
+                rejected: extractions.flatMap(({ page, extraction }) =>
+                    extraction.rejected.map((r) => ({ filename: page.filename, ...r })),
+                ),
+                ingested: summary.ingested,
+                duplicates: summary.duplicates,
+                quarantined: summary.quarantined,
+                needsEntityReview: summary.needsEntityReview,
+                scoring: {
+                    available: scored.available,
+                    scored: scored.scored.length,
+                    pending: scored.pending.length,
+                    reason: scored.reason || null,
+                },
+            },
+        });
     } catch (error) {
         console.error('Error during OCR processing:', error);
-        
         return res.status(500).json({
-            success: false,
-            message: 'Error processing images for OCR',
-            error: error.message
+            status: 'error',
+            message: process.env.DEBUG ? error.message : 'Error processing images',
+            data: {},
         });
     }
 };
 
-module.exports = { 
-    input
-};
+module.exports = { input };
