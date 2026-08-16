@@ -661,6 +661,207 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /service/donations/occurred-as-sender:
+    post:
+      tags:
+        - Donation Management
+      summary: Record that a donation occurred (sender)
+      description: |
+        Records that the authenticated user, as sender, confirms the transaction
+        took place.
+
+        This establishes **occurrence only**. It is not a statement that the
+        donation is low risk, and it never becomes one: a donation split across
+        many nominal donors is genuinely received, and its recipient confirms it
+        truthfully. Treating confirmations as clean labels would train the model
+        that verified splitting is legitimate.
+
+        A risk verdict comes from `/service/donations/disposition` or
+        `/service/donations/dispute-outcome`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OccurrenceRequest'
+      responses:
+        '200':
+          description: Occurrence recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such donation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/donations/occurred-as-receiver:
+    post:
+      tags:
+        - Donation Management
+      summary: Record that a donation occurred (receiver)
+      description: |
+        As `/service/donations/occurred-as-sender`, for the receiving party.
+        Records occurrence only; it carries no risk verdict.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OccurrenceRequest'
+      responses:
+        '200':
+          description: Occurrence recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/donations/disposition:
+    post:
+      tags:
+        - Donation Management
+      summary: Record an analyst's judgement about a donation
+      description: |
+        Records a human verdict on a donation. These are the labels the model is
+        measured against; agreement with the behavioural heuristics the model
+        trained on is not a success metric.
+
+        A later disposition supersedes an earlier one without deleting it, so
+        the history of what was decided and when stays reconstructible.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DispositionRequest'
+      responses:
+        '200':
+          description: Disposition recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request or unrecognised value
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such donation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/donations/dispute-outcome:
+    post:
+      tags:
+        - Donation Management
+      summary: Record the outcome of a contested attribution
+      description: |
+        The strongest label available, because the matter was investigated and
+        resolved. An upheld dispute is also a correction to the record and marks
+        the donation for re-scoring, so the correction propagates instead of
+        leaving the original error in every total that used it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DisputeOutcomeRequest'
+      responses:
+        '200':
+          description: Outcome recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/donations/queue:
+    get:
+      tags:
+        - Donation Management
+      summary: Review queue
+      description: |
+        Donations awaiting human review, most pressing first.
+
+        Statutory findings are ordered above behavioural scores rather than
+        interleaved with them by magnitude. A breach of a stated limit is a fact
+        with an article behind it; a behavioural score is an estimate, and
+        ranking one against the other would put the estimate above the fact.
+
+        Each item carries the rules that could not be evaluated. A donation with
+        no findings and several unevaluated rules has been partly examined, not
+        cleared.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+      responses:
+        '200':
+          description: Review queue
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
 components:
   securitySchemes:
     BearerAuth:
@@ -670,6 +871,59 @@ components:
       description: JWT Bearer token authentication
 
   schemas:
+
+    OccurrenceRequest:
+      type: object
+      required:
+        - donation_id
+      properties:
+        donation_id:
+          type: string
+          description: Canonical donation identifier
+        note:
+          type: string
+          nullable: true
+
+    DispositionRequest:
+      type: object
+      required:
+        - donation_id
+        - value
+      properties:
+        donation_id:
+          type: string
+        value:
+          type: string
+          enum: [risky, not_risky, indeterminate]
+          description: |
+            The analyst's verdict. `indeterminate` is a real outcome and is
+            recorded rather than treated as a missing answer.
+        typology:
+          type: string
+          nullable: true
+          description: Which pattern was observed, where the analyst identified one
+        note:
+          type: string
+          nullable: true
+
+    DisputeOutcomeRequest:
+      type: object
+      required:
+        - donation_id
+        - upheld
+        - value
+      properties:
+        donation_id:
+          type: string
+        upheld:
+          type: boolean
+          description: Whether the contested attribution was found to be wrong
+        value:
+          type: string
+          enum: [risky, not_risky, indeterminate]
+        note:
+          type: string
+          nullable: true
     # Authentication Schemas
     LoginRequest:
       type: object
