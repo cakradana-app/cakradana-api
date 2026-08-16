@@ -5,6 +5,7 @@ const verifyToken = require('../../../middlewares/auth/jwt/jwt.verify');
 
 const donationController = require('./donation.controller');
 const labelsController = require('./labels.controller');
+const networkController = require('./network.controller');
 
 donationRouter.get('/entities', verifyToken, donationController.entities);
 donationRouter.get('/list', verifyToken, donationController.list);
@@ -25,5 +26,10 @@ donationRouter.post('/disposition', verifyToken, labelsController.disposition);
 donationRouter.post('/dispute-outcome', verifyToken, labelsController.disputeOutcome);
 
 donationRouter.get('/queue', verifyToken, labelsController.queue);
+
+// The donation graph. Findings attach to flows, never to the parties: moving a
+// statutory finding onto a person turns a fact about a payment into a label on
+// a name.
+donationRouter.get('/network', verifyToken, networkController.network);
 
 module.exports = donationRouter;
