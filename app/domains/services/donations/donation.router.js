@@ -4,12 +4,26 @@ const donationRouter = express.Router();
 const verifyToken = require('../../../middlewares/auth/jwt/jwt.verify');
 
 const donationController = require('./donation.controller');
+const labelsController = require('./labels.controller');
 
 donationRouter.get('/entities', verifyToken, donationController.entities);
 donationRouter.get('/list', verifyToken, donationController.list);
 donationRouter.get('/list-as-sender', verifyToken, donationController.listAsSender);
 donationRouter.get('/list-as-receiver', verifyToken, donationController.listAsReceiver);
+
+// Confirmation records that a donation occurred. It deliberately carries no
+// risk verdict: a donation split across many nominal donors is genuinely
+// received, and its recipient confirms it truthfully.
 donationRouter.post('/confirm-as-sender', verifyToken, donationController.confirmAsSender);
 donationRouter.post('/confirm-as-receiver', verifyToken, donationController.confirmAsReceiver);
+donationRouter.post('/occurred-as-sender', verifyToken, labelsController.confirmAsSender);
+donationRouter.post('/occurred-as-receiver', verifyToken, labelsController.confirmAsReceiver);
+
+// Human judgement about risk. These are the labels the model is measured
+// against; agreement with the behavioural heuristics is not a success metric.
+donationRouter.post('/disposition', verifyToken, labelsController.disposition);
+donationRouter.post('/dispute-outcome', verifyToken, labelsController.disputeOutcome);
+
+donationRouter.get('/queue', verifyToken, labelsController.queue);
 
 module.exports = donationRouter;
