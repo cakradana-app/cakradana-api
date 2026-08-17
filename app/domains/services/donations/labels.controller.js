@@ -68,7 +68,19 @@ async function recordOccurrence(req, res, party) {
             source: 'recipient_confirmation',
             weight: SOURCE_WEIGHTS.recipient_confirmation,
             actor: req.user?.email || null,
+            confirmedParty: party,
             note: note || `confirmed as ${party}`,
+        });
+
+        // Whether the other side has said the same thing. Two parties
+        // independently confirming the same transaction is a stronger account
+        // of it than one party confirming twice, and the difference is only
+        // visible if the sides are counted separately.
+        const other = party === 'sender' ? 'receiver' : 'sender';
+        const corroborated = await Label.exists({
+            donationId: donation._id,
+            source: 'recipient_confirmation',
+            confirmedParty: other,
         });
 
         return res.status(200).json({
@@ -76,6 +88,8 @@ async function recordOccurrence(req, res, party) {
             message: 'Recorded that this donation occurred',
             data: {
                 label_id: label._id,
+                confirmed_as: party,
+                confirmed_by_both_parties: Boolean(corroborated),
                 records: 'that the transaction took place',
                 does_not_record:
                     'that the donation is low risk; only an analyst disposition or an ' +

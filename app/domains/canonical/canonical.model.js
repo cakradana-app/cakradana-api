@@ -228,6 +228,19 @@ const labelSchema = new mongoose.Schema(
         weight: { type: Number, min: 0, max: 1, required: true },
         actor: { type: String, default: null },
         note: { type: String, default: null },
+        // Which side of the transaction confirmed it, on a confirmation.
+        //
+        // The two are different claims. A recipient saying a donation arrived
+        // and a donor saying they sent it corroborate each other only when
+        // both are recorded as distinct; one party confirming twice is one
+        // account of the transaction, not two. Carried as a field rather than
+        // left in the note, because a distinction that only exists in free
+        // text cannot be queried and so cannot be relied on.
+        confirmedParty: {
+            type: String,
+            enum: ['sender', 'receiver', null],
+            default: null,
+        },
         // Set when this label was one of a set cleared together for a shared
         // reason. A hundred donations cleared individually are a hundred
         // unrelated judgements; the same hundred sharing an id are one signal
