@@ -2,7 +2,11 @@ const express = require('express');
 const donationRouter = express.Router();
 
 const verifyToken = require('../../../middlewares/auth/jwt/jwt.verify');
-const { requireRole, REVIEWERS } = require('../../../middlewares/auth/roles');
+const {
+    requireRole,
+    requireRoleStrict,
+    REVIEWERS,
+} = require('../../../middlewares/auth/roles');
 
 const donationController = require('./donation.controller');
 const labelsController = require('./labels.controller');
@@ -42,10 +46,12 @@ donationRouter.post('/bulk-clear', verifyToken, requireRole(REVIEWERS), labelsCo
 // fan-in as forty separate decisions loses the fact that a group was examined as
 // a group, and makes the retraining signal count one conclusion forty times.
 // Members can be excepted individually, and an exception is marked as one.
+// Strict: one call writes an analyst disposition onto every member of the
+// cluster, which is the training signal and the review record at once.
 donationRouter.post(
     '/disposition-alert',
     verifyToken,
-    requireRole(REVIEWERS),
+    requireRoleStrict(REVIEWERS),
     labelsController.dispositionAlert,
 );
 donationRouter.get(

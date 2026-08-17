@@ -86,4 +86,56 @@ function requireRole(...allowed) {
     };
 }
 
-module.exports = { ROLES, DEFAULT_ROLE, REVIEWERS, requireRole, roleOf, enforcing };
+/**
+ * Require a role, whatever the enforcement flag says.
+ *
+ * Shadow mode exists so an operator can read the blast radius of enforcement
+ * before switching it on, and for a read that is a sound trade: the cost of
+ * being wrong is a log line. For an action that cannot be undone it is not.
+ *
+ * Merging two entities attributes one person's donations to another and can
+ * produce a statutory finding against somebody who did nothing. Dispositioning
+ * a cluster writes the training signal for every donation in it. Neither has a
+ * shadow-mode version — the write either happens or it does not — so neither
+ * waits for the flag.
+ *
+ * The denial is still counted, and counted as enforced, so the difference
+ * between the two modes stays visible in the metrics rather than looking like
+ * traffic that never arrived.
+ */
+function requireRoleStrict(...allowed) {
+    const permitted = allowed.flat();
+    return (req, res, next) => {
+        const role = roleOf(req);
+        if (permitted.includes(role)) return next();
+
+        metrics.increment('cakradana_role_denials_total', {
+            role,
+            enforced: true,
+        });
+        log.warn('irreversible action refused', {
+            role,
+            permitted,
+            path: req.path,
+            enforcement: enforcing() ? 'enabled' : 'disabled-but-not-waivable',
+        });
+
+        return res.status(403).json({
+            status: 'error',
+            message:
+                `This action needs one of: ${permitted.join(', ')}. This account is ${role}. ` +
+                'It cannot be undone, so it is refused whether or not role enforcement is on.',
+            data: {},
+        });
+    };
+}
+
+module.exports = {
+    ROLES,
+    DEFAULT_ROLE,
+    REVIEWERS,
+    requireRole,
+    requireRoleStrict,
+    roleOf,
+    enforcing,
+};

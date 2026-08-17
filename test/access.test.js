@@ -14,6 +14,7 @@ const {
     DEFAULT_ROLE,
     REVIEWERS,
     requireRole,
+    requireRoleStrict,
     roleOf,
 } = require('../app/middlewares/auth/roles');
 
@@ -115,4 +116,70 @@ test('an administrator is not a reviewer either', () => {
 
 test('every role is a known role', () => {
     for (const role of REVIEWERS) assert.ok(ROLES.includes(role));
+});
+
+/**
+ * Actions that shadow mode does not cover.
+ *
+ * Role enforcement ships off so an operator can read the blast radius before
+ * switching it on, and for a read that is a sound trade: the cost of being
+ * wrong is a log line. For a write that cannot be undone it is not.
+ *
+ * Merging two entities attributes one person's donations to another and can
+ * produce a statutory finding against somebody who did nothing; the audit
+ * record then names whoever made the call as the analyst who decided it.
+ * Dispositioning a cluster writes the training signal for every donation in it.
+ * Neither has a shadow-mode version — the write happens or it does not.
+ */
+
+test('an irreversible action is refused even while enforcement is off', (t) => {
+    const previous = process.env.ENFORCE_ROLES;
+    process.env.ENFORCE_ROLES = 'false';
+    t.after(() => {
+        if (previous === undefined) delete process.env.ENFORCE_ROLES;
+        else process.env.ENFORCE_ROLES = previous;
+    });
+
+    const result = call(requireRoleStrict(REVIEWERS), { role: DEFAULT_ROLE });
+    assert.equal(result.passed, false);
+    assert.equal(result.status, 403);
+});
+
+test('the refusal says why the flag did not help', (t) => {
+    const previous = process.env.ENFORCE_ROLES;
+    process.env.ENFORCE_ROLES = 'false';
+    t.after(() => {
+        if (previous === undefined) delete process.env.ENFORCE_ROLES;
+        else process.env.ENFORCE_ROLES = previous;
+    });
+
+    const result = call(requireRoleStrict(REVIEWERS), { role: DEFAULT_ROLE });
+    assert.match(result.body.message, /cannot be undone/);
+});
+
+test('the same account is let through in shadow mode on a reversible action', (t) => {
+    // The contrast is the point: shadow mode still does what it is for.
+    const previous = process.env.ENFORCE_ROLES;
+    process.env.ENFORCE_ROLES = 'false';
+    t.after(() => {
+        if (previous === undefined) delete process.env.ENFORCE_ROLES;
+        else process.env.ENFORCE_ROLES = previous;
+    });
+
+    assert.equal(call(requireRole(REVIEWERS), { role: DEFAULT_ROLE }).passed, true);
+});
+
+test('a permitted role passes the strict gate', () => {
+    assert.equal(call(requireRoleStrict(REVIEWERS), { role: REVIEWERS[0] }).passed, true);
+});
+
+test('the strict gate still refuses when enforcement is on', (t) => {
+    const previous = process.env.ENFORCE_ROLES;
+    process.env.ENFORCE_ROLES = 'true';
+    t.after(() => {
+        if (previous === undefined) delete process.env.ENFORCE_ROLES;
+        else process.env.ENFORCE_ROLES = previous;
+    });
+
+    assert.equal(call(requireRoleStrict(REVIEWERS), { role: DEFAULT_ROLE }).status, 403);
 });
