@@ -1451,6 +1451,23 @@ paths:
         - Public
       summary: Published donation aggregates
       description: |
+        Covers **closed quarters only**. The quarter in progress is not
+        published at all: its figures change with every donation admitted, and
+        an observer polling across releases watches a cell gain one donor and
+        one amount, which discloses that donation to within the rounding
+        against a named recipient — the leak the five-donor threshold exists to
+        prevent, reached by subtraction rather than directly.
+
+        A published figure is never revised in place, for the same reason.
+        When the records behind a cell change, the published figures stay and
+        the cell reports `revision_pending`, so a reader is not shown a changed
+        number with no way to tell it changed.
+
+        `period` must be a quarter (`YYYY-Qn`) and `electoral_context` a plain
+        label. Both are validated rather than passed through: this is the one
+        route with no token in front of it, and an object where a value goes
+        reaches the database as an operator.
+
         Served only from a separately materialised collection, never by
         filtering the operational store at request time. A query-time path is
         one filter bug away from publishing risk scores about named people, and
@@ -1501,6 +1518,21 @@ paths:
         the figures by which an outside reader can judge whether the system
         works — including the upheld-dispute rate, which is the one that would
         embarrass it if it were high, and is here for that reason.
+
+        Materialised on the same schedule as the aggregates and served from
+        that record, not counted per request. Counting live meant collection
+        scans on an unauthenticated, uncached route; it also made the donation
+        count a feed, since polling it at single-record granularity says when
+        records were ingested and how many.
+
+        `published: false` means no dataset has been built. That is distinct
+        from a system holding nothing, which zeroes would have claimed.
+        `materialised_at` is when these figures were counted — they are as
+        fresh as the last build and no fresher.
+
+        `dispute_upheld_rate` is null when no dispute has been raised. A rate
+        over no disputes is unmeasured, not zero; reporting zero would claim
+        nothing has ever been contested successfully.
 
         `published_dataset` says whether there is a published dataset and when
         it was last built. An empty cell list at `/public/aggregates` has three
