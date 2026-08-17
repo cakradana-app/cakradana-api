@@ -49,6 +49,10 @@ out/
 dist/
 build/
 
+# Database archives written by scripts/backup.js. They hold the same personal
+# data the live store does, so committing one would publish it to every clone.
+backups/
+
 # Coverage directory used by tools like istanbul
 coverage/
 

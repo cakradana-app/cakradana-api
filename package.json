@@ -6,6 +6,8 @@
     "start": "node app/index.js",
     "dev": "nodemon app/index.js",
     "test": "node --test test/*.test.js",
+    "backup": "node scripts/backup.js",
+    "restore": "node scripts/restore.js",
     "eval:extraction": "node scripts/evaluate-extraction.js"
   },
   "repository": {
