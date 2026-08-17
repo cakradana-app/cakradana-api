@@ -253,3 +253,64 @@ test('the operations view counts without naming anybody', async () => {
     assert.equal(res.sent.body.data.dispute_upheld_rate, null);
     assert.equal(JSON.stringify(res.sent.body).includes('Donor 0'), false);
 });
+
+test('the quarter in progress is not published', async () => {
+    // Its figures change with every donation admitted, and publishing the
+    // sequence is publishing the donations. An observer polling across releases
+    // of an open quarter watches a cell gain one donor and one amount, which
+    // discloses that donation to the rupiah against a named recipient — the
+    // leak the threshold exists to prevent, arrived at by subtraction.
+    const party = await makeEntity('Partai Maju', 'political-party');
+    for (let index = 0; index < MIN_DONORS_PER_CELL; index += 1) {
+        const donor = await makeEntity(`Donor ${index}`);
+        await donate(donor, party, 10_000_000, `open-${index}`);
+    }
+
+    // `donate` files everything in 2026-Q2, so a clock inside that quarter
+    // makes it the quarter in progress.
+    await controller.materialise({ now: new Date('2026-05-01T00:00:00Z'), allowEmpty: true });
+    assert.equal(await PublicAggregate.countDocuments({}), 0);
+
+    // And a clock past it makes the same quarter publishable.
+    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+    assert.equal(await PublicAggregate.countDocuments({}), 1);
+});
+
+test('a published figure is not revised in place', async () => {
+    // Republishing a revised figure is a second observation of one cell, and
+    // the difference between the two is exactly what an observer differences.
+    const party = await cellWith(MIN_DONORS_PER_CELL);
+    const later = new Date('2026-08-01T00:00:00Z');
+    await controller.materialise({ now: later });
+
+    const first = await PublicAggregate.findOne({}).lean();
+    assert.equal(first.donorCount, MIN_DONORS_PER_CELL);
+    assert.ok(first.firstPublishedAt);
+    assert.equal(first.revisionPending, false);
+
+    // A sixth donor arrives for the same closed quarter.
+    const extra = await makeEntity('Donor extra');
+    await donate(extra, party, 250_000_000, 'extra-1');
+    await controller.materialise({ now: new Date('2026-08-02T00:00:00Z') });
+
+    const again = await PublicAggregate.findOne({}).lean();
+    assert.equal(
+        again.donorCount,
+        MIN_DONORS_PER_CELL,
+        'the published donor count moved, which discloses the new donor',
+    );
+    assert.equal(again.totalIdr, first.totalIdr, 'the published total moved');
+    assert.equal(again.revisionPending, true);
+    assert.match(again.revisionNote, /published figures are unchanged/);
+    assert.equal(
+        again.firstPublishedAt.getTime(),
+        first.firstPublishedAt.getTime(),
+    );
+});
+
+test('the response says the current quarter is absent by design', async () => {
+    await cellWith(MIN_DONORS_PER_CELL);
+    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+    const sent = await serve();
+    assert.match(sent.body.data.covers, /closed quarters only/);
+});

@@ -47,6 +47,18 @@ const publicAggregateSchema = new mongoose.Schema(
 
         materialisedAt: { type: Date, required: true },
         sourceRecords: { type: Number, required: true },
+
+        // When this cell's figures were first published, and never updated
+        // afterwards. A published figure is frozen: see the note on
+        // differencing in the materialiser.
+        firstPublishedAt: { type: Date, default: null },
+        // Set when a rebuild computed different figures for a cell that has
+        // already been published. The published figures do not change; this
+        // says that they no longer match the records, so a reader is not left
+        // believing a stale figure is current and a person can decide whether
+        // releasing the correction is worth what releasing it discloses.
+        revisionPending: { type: Boolean, default: false },
+        revisionNote: { type: String, default: null },
     },
     { timestamps: true },
 );
@@ -77,4 +89,70 @@ publicAggregateSchema.pre('validate', function refuseAnyVerdict(next) {
 
 const PublicAggregate = mongoose.model('PublicAggregate', publicAggregateSchema);
 
-module.exports = { PublicAggregate, MIN_DONORS_PER_CELL, AMOUNT_ROUNDING_IDR };
+/**
+ * The collection a rebuild is assembled in before it becomes the dataset.
+ *
+ * Building in place meant deleting every cell and then inserting the new ones,
+ * with a window between the two in which the published dataset was empty — and
+ * an empty dataset reads as an absence of donations, which is the one thing
+ * this collection exists to avoid saying by accident. A build that failed in
+ * that window left it empty until the next day's run.
+ */
+const BUILDING_COLLECTION = 'publicaggregates_building';
+
+/**
+ * What each rebuild did.
+ *
+ * A failed build leaves the previous dataset in place, which is the right
+ * behaviour and an invisible one: the endpoint keeps answering and nothing says
+ * the figures stopped being refreshed. This is where that is visible, and it is
+ * why failures are recorded as well as successes.
+ */
+/**
+ * The same schema, bound to the staging collection.
+ *
+ * A rebuild is written through this rather than through the raw driver, so that
+ * it passes the same validation as every other write. The hook above is the one
+ * place the "never a score" rule is enforced rather than trusted, and the
+ * rebuild is precisely the writer it exists to check — inserting into staging
+ * with the driver would skip it, and the collection would then become the
+ * published dataset without anything having looked at it.
+ *
+ * Indexing is off: the staging collection is dropped and recreated by every
+ * build, and the indexes that matter are the ones created on it just before the
+ * swap, which the rename carries across.
+ */
+const PublicAggregateStaging = mongoose.model(
+    'PublicAggregateStaging',
+    publicAggregateSchema.clone().set('autoIndex', false),
+    BUILDING_COLLECTION,
+);
+
+const publicDatasetBuildSchema = new mongoose.Schema(
+    {
+        startedAt: { type: Date, required: true },
+        completedAt: { type: Date, default: null },
+        outcome: { type: String, enum: ['success', 'failed'], required: true },
+        cells: { type: Number, default: 0 },
+        published: { type: Number, default: 0 },
+        suppressed: { type: Number, default: 0 },
+        sourceRecords: { type: Number, default: 0 },
+        durationMs: { type: Number, default: null },
+        error: { type: String, default: null },
+    },
+    { timestamps: false, collection: 'publicdatasetbuilds' },
+);
+
+publicDatasetBuildSchema.index({ completedAt: -1 });
+publicDatasetBuildSchema.index({ outcome: 1, completedAt: -1 });
+
+const PublicDatasetBuild = mongoose.model('PublicDatasetBuild', publicDatasetBuildSchema);
+
+module.exports = {
+    PublicAggregate,
+    PublicAggregateStaging,
+    PublicDatasetBuild,
+    BUILDING_COLLECTION,
+    MIN_DONORS_PER_CELL,
+    AMOUNT_ROUNDING_IDR,
+};
