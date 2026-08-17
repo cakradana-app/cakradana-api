@@ -31,10 +31,12 @@
 const { before, beforeEach, after } = require('node:test');
 const mongoose = require('mongoose');
 
-//: Starting a server and downloading its binary on a cold cache is slow, and
-//: an unexplained timeout here reads as a broken test rather than a slow
-//: download.
-const START_TIMEOUT_MS = 120_000;
+//: How long to wait for a supplied database before giving up. Short, because
+//: the failure it produces is the useful one: a URI pointing at nothing should
+//: say so while somebody is still watching, not two minutes later. Starting an
+//: in-process server has no such limit — a cold binary download is slow and
+//: cancelling it would report a missing database that is merely still arriving.
+const SERVER_SELECTION_TIMEOUT_MS = 15_000;
 
 let server = null;
 
@@ -71,7 +73,7 @@ async function start() {
         // parallel processes and a shared name would let one file's cleanup
         // empty another file's fixtures mid-assertion.
         dbName: `cakradana-test-${process.pid}`,
-        serverSelectionTimeoutMS: START_TIMEOUT_MS,
+        serverSelectionTimeoutMS: SERVER_SELECTION_TIMEOUT_MS,
     });
 }
 

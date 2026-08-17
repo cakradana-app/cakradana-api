@@ -49,6 +49,31 @@ jobs:
       fail-fast: false
       matrix:
         node: ['20', '22']
+
+    # The write paths cannot be tested without one. A merge repoints
+    # donations across four collections, and a corroboration count is a
+    # judgement about what is already held; both were untested for exactly as
+    # long as the suite had no database, and both were where review found a
+    # defect that the code's own docstring claimed to prevent.
+    #
+    # Supplied as a service rather than downloaded per job: the harness starts
+    # an in-process server when MONGO_TEST_URI is absent, which is right for a
+    # developer and wasteful for a runner that would fetch the binary every
+    # time.
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 })'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      MONGO_TEST_URI: mongodb://127.0.0.1:27017
+
     steps:
       - uses: actions/checkout@v4
 
@@ -68,6 +93,14 @@ jobs:
       # finds.
       - name: Extraction evaluation
         run: node --test test/extraction-evaluation.test.js
+
+      # Also named separately, and for the same reason: these are the only
+      # tests that exercise a write. `npm test` above already runs them, but a
+      # harness that silently fell back to skipping would leave the run green
+      # and the merge untested — the state this stage exists to end. Running
+      # them again on their own makes that failure a stage, not a footnote.
+      - name: Write paths, against a database
+        run: node --test test/*.integration.test.js
 
   spec:
     name: openapi
