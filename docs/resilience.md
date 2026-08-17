@@ -140,11 +140,13 @@ restores that "worked". It also asserts the refusals: an empty archive, a
 tampered archive, a non-empty target, a short restore, and a restore holding the
 right number of the wrong documents.
 
-It uses `mongodb-memory-server`, or whatever `RESILIENCE_TEST_URI` points at:
+It runs against a server already provided — `RESILIENCE_TEST_URI`, or the
+`MONGO_TEST_URI` the other write-path tests use — in preference to starting one,
+and falls back to `mongodb-memory-server`:
 
 ```bash
 docker compose up -d mongodb
-RESILIENCE_TEST_URI='mongodb://admin:password@localhost:27017/?authSource=admin' \
+MONGO_TEST_URI='mongodb://admin:password@localhost:27017/?authSource=admin' \
   node --test test/resilience.test.js
 ```
 

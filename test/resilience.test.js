@@ -53,18 +53,20 @@ let databases = 0;
 /**
  * The mongod every case here runs against.
  *
- * `mongodb-memory-server` when it is installed, and whatever
- * `RESILIENCE_TEST_URI` points at otherwise — the `mongodb` service in
- * compose.yml, typically. Both give a real mongod, and the failures worth
- * catching here are the ones a fake does not have. When neither is reachable
- * this throws and names both options, because an unreachable database is an
- * environment problem and must not read as a broken restore.
+ * A server already provided — `RESILIENCE_TEST_URI`, or the `MONGO_TEST_URI`
+ * the rest of the write-path tests use — in preference to starting one, so a
+ * runner with a database service attached does not also fetch a mongod binary.
+ * `mongodb-memory-server` otherwise. Both give a real mongod, and the failures
+ * worth catching here are the ones a fake does not have. When neither is
+ * reachable this throws and names both options, because an unreachable database
+ * is an environment problem and must not read as a broken restore.
  */
 async function mongod() {
     if (server) return server;
 
-    if (process.env.RESILIENCE_TEST_URI) {
-        server = { uri: process.env.RESILIENCE_TEST_URI, stop: async () => {} };
+    const provided = process.env.RESILIENCE_TEST_URI || process.env.MONGO_TEST_URI;
+    if (provided) {
+        server = { uri: provided, stop: async () => {} };
         return server;
     }
 
@@ -75,7 +77,7 @@ async function mongod() {
         throw new Error(
             'the restore drill needs a MongoDB and found none. Install the dev ' +
             'dependencies (`npm ci`), or start the compose service and set ' +
-            'RESILIENCE_TEST_URI=mongodb://admin:password@localhost:27017/?authSource=admin. ' +
+            'MONGO_TEST_URI=mongodb://admin:password@localhost:27017/?authSource=admin. ' +
             `Underlying error: ${error.message}`,
         );
     }
@@ -85,7 +87,7 @@ async function mongod() {
         instance = await MongoMemoryServer.create();
     } catch (error) {
         throw new Error(
-            'mongodb-memory-server could not start a mongod. Set RESILIENCE_TEST_URI to a ' +
+            'mongodb-memory-server could not start a mongod. Set MONGO_TEST_URI to a ' +
             `reachable MongoDB to run the drill against instead. Underlying error: ${error.message}`,
         );
     }
