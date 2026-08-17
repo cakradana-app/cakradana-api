@@ -671,6 +671,58 @@ test('a backup taken while the legacy document holds the only copy of a donation
     assert.equal(recovered.date.getTime(), onlyCopy.date.getTime());
 });
 
+test('an identifier survives a backup and a restore, still unreadable without the key', async () => {
+    // Nothing regenerates an identifier: it was recorded by somebody who saw a
+    // document. What the archive carries is the ciphertext and the keyed hash,
+    // and the key is deliberately not in it — so this asserts both halves, that
+    // the record comes back and that the archive never held the number.
+    const source = await newStore();
+    const target = await newStore();
+    const out = newWorkspace();
+
+    const entityId = new mongoose.Types.ObjectId();
+    const identifier = {
+        _id: new mongoose.Types.ObjectId(),
+        valueRef: `idref_${'a'.repeat(32)}`,
+        entityId,
+        scheme: 'nik',
+        lookupHash: 'f'.repeat(64),
+        ciphertext: 'ZGVsaWJlcmF0ZWx5LW9wYXF1ZQ==',
+        iv: '00112233445566778899aabb',
+        tag: 'ccddeeff00112233445566778899aabb',
+        validated: false,
+        validatedAgainst: null,
+        recordedBy: 'analyst@example.org',
+    };
+
+    const connection = await mongoose.createConnection(source).asPromise();
+    await connection.db.collection('entityidentifiers').insertOne(identifier);
+    await connection.close();
+
+    const { archive } = await backup({ uri: source, out, log: quiet });
+
+    const dumped = fs.readFileSync(path.join(archive, 'entityidentifiers.jsonl'), 'utf8');
+    assert.match(dumped, /idref_a{32}/);
+
+    await restore({ from: archive, uri: target, log: quiet });
+
+    const restoredConnection = await mongoose.createConnection(target).asPromise();
+    const restored = await restoredConnection.db
+        .collection('entityidentifiers')
+        .findOne({ valueRef: identifier.valueRef });
+    await restoredConnection.close();
+
+    assert.ok(restored, 'the identifier did not survive the restore');
+    assert.equal(restored.ciphertext, identifier.ciphertext);
+    assert.equal(restored.lookupHash, identifier.lookupHash);
+    // And carries no way to read any of it: the archive is documents and a
+    // manifest, with nothing in it that could hold a key.
+    assert.deepEqual(
+        fs.readdirSync(archive).sort(),
+        ['manifest.json', ...BACKUP_SET.map((entry) => `${entry.collection}.jsonl`)].sort(),
+    );
+});
+
 test('the legacy document is reported as load-bearing while any row exists nowhere else', async () => {
     const uri = await newStore();
     await seedLegacy(uri, { rows: 3, migrated: 1 });

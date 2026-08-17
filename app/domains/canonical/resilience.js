@@ -184,6 +184,18 @@ const BACKUP_SET = Object.freeze([
             'running. Losing one loses the contest and the clock on it',
     }),
     Object.freeze({
+        collection: 'entityidentifiers',
+        model: () => require('../identity/identifier.model').EntityIdentifier,
+        because:
+            'the strong identifiers that make an attribution certain, and the keyed ' +
+            'hashes that let two records be recognised as one person. Nothing ' +
+            'regenerates either: an identifier is recorded by somebody who saw a ' +
+            'document. The values are encrypted at rest, so the archive is worth ' +
+            'nothing without IDENTIFIER_KEY and IDENTIFIER_PEPPER — which are ' +
+            'deliberately not in it, and without which a restore recovers records ' +
+            'nobody can read',
+    }),
+    Object.freeze({
         collection: 'users',
         model: () => require('../users/user.model').User,
         because:
@@ -234,7 +246,7 @@ const NOT_BACKED_UP = Object.freeze([
  * least once, the manifest also records a fingerprint computed from the schemas
  * themselves, so a restore can report drift the constant did not.
  */
-const SCHEMA_VERSION = '2026.08.2';
+const SCHEMA_VERSION = '2026.08.3';
 
 /**
  * A digest over the declared field paths of every backed-up collection.

@@ -40,6 +40,20 @@ What is captured and why each collection cannot simply be rebuilt is listed in
 `BACKUP_SET`; what is deliberately left out, and why, is listed in
 `NOT_BACKED_UP` next to it.
 
+### Strong identifiers
+
+`entityidentifiers` is in the set for the same reason as the labels: nothing
+regenerates it. An identifier was recorded by somebody who saw a document, and
+the keyed hash beside it is what lets two records be recognised as one person.
+
+It is the one collection whose values are already encrypted where they sit, and
+the key is not in the archive. That is deliberate — a dump copied somewhere it
+should not be yields nothing — and it has a consequence for recovery: restoring
+this collection without `IDENTIFIER_KEY` and `IDENTIFIER_PEPPER` recovers records
+nobody can read, and the keyed hashes stop matching if the pepper differs. **The
+secrets are part of the recovery and are not part of the backup.** Wherever they
+are kept, a restore needs them back before this collection means anything.
+
 ### The legacy document
 
 `services` — the single document the service began with — is in the backup set,
@@ -230,10 +244,18 @@ it.
 - **Backups are scheduled outside the application.** A schedule that was never
   created is visible in the health and metrics surfaces and nowhere else. If
   nobody alerts on those, this reduces to a documented intention.
-- **Archives are not encrypted by this tooling.** They hold political-affiliation
-  data and rely on the storage they are written to for confidentiality. Writing
-  them somewhere with encryption at rest and access control is part of deploying
-  this, not part of running the script.
+- **Archives are not encrypted by this tooling.** They hold
+  political-affiliation data and rely on the storage they are written to for
+  confidentiality. Writing them somewhere with encryption at rest and access
+  control is part of deploying this, not part of running the script. The one
+  exception is `entityidentifiers`, whose values are encrypted before they are
+  ever stored — and whose key the archive deliberately does not carry, which is
+  a recovery dependency as much as a protection.
+- **The secrets are not backed up.** `IDENTIFIER_KEY`, `IDENTIFIER_PEPPER`,
+  `JWT_SECRET`, and the mail and provider credentials live in the environment,
+  not in the database, so none of them are in an archive. A restore that has the
+  data and not the secrets is not a recovered service. Where they are kept, and
+  how they are recovered, is outside what these scripts can promise.
 - **The published dataset is not backed up.** It is materialised from donations
   on a schedule by `public.scheduler.js`, so it is rebuildable by construction —
   and restoring a stale copy would republish figures that may since have been
