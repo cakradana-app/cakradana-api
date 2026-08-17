@@ -20,10 +20,13 @@ const {
     EntityIdentifier,
     IDENTIFIER_SCHEMES,
     IdentifierSecretsMissing,
+    IdentifierRejected,
     lookupHash,
     encrypt,
     decrypt,
     configured,
+    newSurrogate,
+    validateValue,
 } = require('./identifier.model');
 
 function fail(res, status, message, data = {}) {
@@ -80,6 +83,16 @@ const mint = async (req, res) => {
         if (!value || String(value).trim() === '') {
             return fail(res, 400, 'value is required');
         }
+        try {
+            // Before anything is derived from it. A placeholder recorded as an
+            // identifier collides with every other placeholder, and a collision
+            // is reported below as the strongest evidence two records are one
+            // party — which would put two unrelated people in the merge queue.
+            validateValue(scheme, value);
+        } catch (err) {
+            if (err instanceof IdentifierRejected) return fail(res, 400, err.message);
+            throw err;
+        }
 
         const entity = await Entity.findById(entityId);
         if (!entity) return fail(res, 404, 'No such entity');
@@ -135,16 +148,42 @@ const mint = async (req, res) => {
             });
         }
 
-        const sealed = encrypt(value);
-        const stored = await EntityIdentifier.create({
-            entityId: entity._id,
-            scheme,
-            lookupHash: hash,
-            ...sealed,
-            validated: Boolean(against),
-            validatedAgainst: against || null,
-            recordedBy: actor,
-        });
+        // The surrogate is issued first so the ciphertext can be bound to it.
+        // Without that binding, the encrypted fields copied from one record onto
+        // another decrypt cleanly and the wrong number is returned under the
+        // wrong entity's disclosure record.
+        const valueRef = newSurrogate();
+        const sealed = encrypt(value, { valueRef, entityId: entity._id, scheme });
+        let stored;
+        try {
+            stored = await EntityIdentifier.create({
+                valueRef,
+                entityId: entity._id,
+                scheme,
+                lookupHash: hash,
+                ...sealed,
+                validated: Boolean(against),
+                validatedAgainst: against || null,
+                recordedBy: actor,
+            });
+        } catch (err) {
+            // The check above is a read followed by a write, so two mints of one
+            // number arriving together both saw nothing and both proceeded. The
+            // unique index is what actually decides; this turns losing that race
+            // into the same answer the check gives.
+            if (err?.code === 11000) {
+                const other = await EntityIdentifier.findOne({ scheme, lookupHash: hash }).lean();
+                return fail(
+                    res,
+                    409,
+                    'This identifier is already recorded. Two records holding one ' +
+                        'identifier is a resolution decision rather than something to ' +
+                        'record twice.',
+                    { other_entity_id: other?.entityId || null },
+                );
+            }
+            throw err;
+        }
 
         // The entity gets the surrogate and nothing else.
         await Entity.updateOne(
@@ -314,6 +353,19 @@ const reveal = async (req, res) => {
  */
 const forEntity = async (req, res) => {
     try {
+        // Recorded, which it was not. This is the one identifier operation that
+        // wrote no trace, and what it discloses — which named people have a NIK
+        // or a passport on file in a political-donation risk system, and whether
+        // anybody checked it — is worth knowing somebody asked for.
+        const actor = req.user?.email || null;
+        if (!actor) return fail(res, 400, 'a lookup must name who made it');
+        await record({
+            actor,
+            action: 'list-identifiers',
+            subjectType: 'Entity',
+            subjectId: String(req.params.id),
+        });
+
         const held = await EntityIdentifier.find({ entityId: req.params.id })
             .select('valueRef scheme validated validatedAgainst createdAt')
             .lean();
@@ -344,8 +396,9 @@ const forEntity = async (req, res) => {
 
 /** Whether this deployment can hold identifiers at all. */
 const status = async (req, res) => {
-    const usable = configured();
-    return res.status(200).json({
+    try {
+        const usable = configured();
+        return res.status(200).json({
         status: 'success',
         message: 'Identifier storage',
         data: {
@@ -355,10 +408,16 @@ const status = async (req, res) => {
             // deployment that cannot store identifiers resolves entities on
             // names alone, which is a materially weaker basis and one an
             // operator should know about before it matters.
-            consequence_when_unusable:
-                'identifiers are refused, so entity resolution rests on names alone',
-        },
-    });
+                consequence_when_unusable:
+                    'identifiers are refused, so entity resolution rests on names alone',
+            },
+        });
+    } catch (err) {
+        // Express 4 does not forward a rejected promise, so without this an
+        // unreachable database takes the process down — from the one endpoint
+        // whose job is to say the store is degraded.
+        return serverError(res, err, 'reading identifier storage status');
+    }
 };
 
 module.exports = { mint, match, reveal, forEntity, status };

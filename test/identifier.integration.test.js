@@ -37,11 +37,14 @@ useDatabase();
 
 const ACTOR = 'analyst@cakradana.faizath.com';
 const NIK = '3174012509900001';
+const BINDING = { valueRef: `idref_${'1'.repeat(32)}`, entityId: '507f1f77bcf86cd799439011', scheme: 'nik' };
 
 //: A key and pepper for the tests. Set per test rather than globally so the
 //: unconfigured behaviour is reachable, which is the branch that matters most.
 const KEY = 'a'.repeat(64);
-const PEPPER = 'test-pepper';
+//: Long enough to satisfy the minimum, which exists because the pepper is
+//: the only thing standing between a dumped collection and enumeration.
+const PEPPER = 'test-pepper-'.repeat(4);
 
 function withSecrets(run) {
     const key = process.env.IDENTIFIER_KEY;
@@ -151,7 +154,7 @@ test('the lookup hash does not contain the value and is keyed', async () =>
         // region and a date of birth, so its real space is small enough to
         // enumerate against a hash somebody has.
         const withPepper = lookupHash('nik', NIK);
-        process.env.IDENTIFIER_PEPPER = 'a different pepper';
+        process.env.IDENTIFIER_PEPPER = 'a-different-pepper-'.repeat(3);
         const withAnother = lookupHash('nik', NIK);
         process.env.IDENTIFIER_PEPPER = PEPPER;
 
@@ -178,14 +181,14 @@ test('presentational punctuation does not make one identifier into two', async (
 
 test('a value survives the round trip exactly', async () =>
     withSecrets(() => {
-        assert.equal(decrypt(encrypt(NIK)), NIK);
+        assert.equal(decrypt({ ...BINDING, ...encrypt(NIK, BINDING) }), NIK);
     }));
 
 test('a tampered record is refused rather than decrypted to something else', async () =>
     withSecrets(() => {
         // The point of the authenticated mode. An identifier silently changed
         // underneath is an attribution moved to somebody else.
-        const sealed = encrypt(NIK);
+        const sealed = { ...BINDING, ...encrypt(NIK, BINDING) };
         const flipped = { ...sealed };
         flipped.ciphertext =
             (flipped.ciphertext[0] === 'a' ? 'b' : 'a') + flipped.ciphertext.slice(1);
@@ -350,7 +353,7 @@ test('without the secrets a value is refused, not stored unprotected', async () 
         assert.equal(sent.status, 503);
         assert.deepEqual(sent.body.data.missing.sort(), [
             'IDENTIFIER_KEY (64 hex characters)',
-            'IDENTIFIER_PEPPER',
+            'IDENTIFIER_PEPPER (at least 32 characters)',
         ]);
         assert.match(sent.body.data.not_a_fallback, /refused/);
         assert.equal(await EntityIdentifier.countDocuments({}), 0);
@@ -389,7 +392,10 @@ test('the safe view lists what an entity is identified by and no values', async 
         });
 
         const res = reply();
-        await controller.forEntity({ params: { id: String(entity._id) } }, res);
+        await controller.forEntity(
+            { params: { id: String(entity._id) }, user: { email: ACTOR } },
+            res,
+        );
 
         assert.equal(res.sent.body.data.count, 1);
         assert.equal(res.sent.body.data.values_included, false);
@@ -431,7 +437,150 @@ test('the status view says what an unusable store costs', async () => {
     // alone, which is materially weaker and something an operator should learn
     // before it matters rather than from an error on first use.
     const res = reply();
-    await controller.status({}, res);
+    await controller.status({ user: { email: ACTOR } }, res);
     assert.equal(res.sent.status, 200);
     assert.match(res.sent.body.data.consequence_when_unusable, /names alone/);
+});
+
+test('a ciphertext moved onto another record does not decrypt', async () =>
+    withSecrets(async () => {
+        // GCM authenticates the ciphertext, not the document holding it. Without
+        // binding, the encrypted fields copied from Alice's record onto Bob's
+        // decrypt cleanly: reading Bob's surrogate returns Alice's number, and
+        // the disclosure is recorded against Bob — so the access log the design
+        // rests on names the wrong subject.
+        const alice = await makeEntity('Alice');
+        const bob = await makeEntity('Bob');
+        const hers = await mint({ entity_id: String(alice._id), scheme: 'nik', value: NIK });
+        const his = await mint({
+            entity_id: String(bob._id),
+            scheme: 'nik',
+            value: '3174012509900002',
+        });
+
+        const stolen = await EntityIdentifier.findOne({ valueRef: hers.body.data.value_ref }).lean();
+        await EntityIdentifier.updateOne(
+            { valueRef: his.body.data.value_ref },
+            { $set: { iv: stolen.iv, ciphertext: stolen.ciphertext, tag: stolen.tag } },
+        );
+
+        const res = reply();
+        await controller.reveal(
+            {
+                params: { ref: his.body.data.value_ref },
+                body: { reason: 'reading a substituted record' },
+                user: { email: ACTOR },
+            },
+            res,
+        );
+        assert.equal(res.sent.status, 500, 'a substituted ciphertext decrypted');
+        assert.equal(JSON.stringify(res.sent.body).includes(NIK), false);
+    }));
+
+test('two entities cannot hold one identifier even without the read check', async () =>
+    withSecrets(async () => {
+        // The controller checks for a collision so it can explain one, but the
+        // check is a read followed by a write: two mints arriving together both
+        // saw nothing. The database is what actually decides.
+        const first = await makeEntity('Budi Santoso');
+        const second = await makeEntity('Budi Santosa');
+        const minted = await mint({ entity_id: String(first._id), scheme: 'nik', value: NIK });
+        const held = await EntityIdentifier.findOne({
+            valueRef: minted.body.data.value_ref,
+        }).lean();
+
+        await assert.rejects(
+            () =>
+                EntityIdentifier.create({
+                    entityId: second._id,
+                    scheme: 'nik',
+                    lookupHash: held.lookupHash,
+                    iv: held.iv,
+                    ciphertext: held.ciphertext,
+                    tag: held.tag,
+                    recordedBy: ACTOR,
+                }),
+            /E11000|duplicate key/,
+        );
+    }));
+
+test('a placeholder is refused rather than recorded as an identifier', async () =>
+    withSecrets(async () => {
+        // Two unrelated people recorded with the same placeholder collide, and
+        // the collision is reported as the strongest evidence they are one
+        // party — which puts them in the merge queue, and a merge on that basis
+        // attributes one person's donations to the other.
+        const entity = await makeEntity();
+        for (const placeholder of ['-', 'N/A', 'n/a', '...', '0']) {
+            const sent = await mint({
+                entity_id: String(entity._id),
+                scheme: 'nik',
+                value: placeholder,
+            });
+            assert.equal(sent.status, 400, `"${placeholder}" was accepted as a NIK`);
+        }
+        assert.equal(await EntityIdentifier.countDocuments({}), 0);
+    }));
+
+test('a value that is not the shape of its scheme is refused', async () =>
+    withSecrets(async () => {
+        const entity = await makeEntity();
+        const short = await mint({
+            entity_id: String(entity._id),
+            scheme: 'nik',
+            value: '317401250990',
+        });
+        assert.equal(short.status, 400);
+        assert.match(short.body.message, /form of a nik/);
+
+        // A scheme with no declared pattern is accepted on length alone; a
+        // passport number's format varies by issuing country and guessing at it
+        // would refuse valid ones.
+        const passport = await mint({
+            entity_id: String(entity._id),
+            scheme: 'passport',
+            value: 'X1234567',
+        });
+        assert.equal(passport.status, 201);
+    }));
+
+test('a guessable pepper is treated as no pepper at all', async () => {
+    // The key protects the plaintext. The pepper is the only thing between a
+    // dumped collection and the enumeration this module exists to prevent, and
+    // only the key was being checked.
+    const key = process.env.IDENTIFIER_KEY;
+    const pepper = process.env.IDENTIFIER_PEPPER;
+    process.env.IDENTIFIER_KEY = KEY;
+    process.env.IDENTIFIER_PEPPER = 'cakradana';
+    try {
+        assert.equal(configured(), false);
+        const entity = await makeEntity();
+        const sent = await mint({ entity_id: String(entity._id), scheme: 'nik', value: NIK });
+        assert.equal(sent.status, 503);
+        assert.ok(sent.body.data.missing.some((m) => m.startsWith('IDENTIFIER_PEPPER')));
+        assert.equal(await EntityIdentifier.countDocuments({}), 0);
+    } finally {
+        if (key === undefined) delete process.env.IDENTIFIER_KEY;
+        else process.env.IDENTIFIER_KEY = key;
+        if (pepper === undefined) delete process.env.IDENTIFIER_PEPPER;
+        else process.env.IDENTIFIER_PEPPER = pepper;
+    }
+});
+
+test('the identifier views do not wait for the enforcement flag', async () => {
+    // With ENFORCE_ROLES=false any account could walk the entity list and learn
+    // which named people have a NIK or a passport on file in a
+    // political-donation risk system. A disclosure cannot be un-made by turning
+    // the flag on later.
+    const router = require('../app/domains/identity/identifier.router');
+    const source = require('node:fs').readFileSync(
+        require.resolve('../app/domains/identity/identifier.router'),
+        'utf8',
+    );
+    assert.equal(
+        /requireRole\(/.test(source),
+        false,
+        'an identifier route is gated by the waivable check',
+    );
+    assert.ok(router);
 });
