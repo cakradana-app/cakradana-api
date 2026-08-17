@@ -235,8 +235,20 @@ function validateCandidate(candidate, foldedDocument, index) {
         record.fields.identity_absence = record.fields.identity_absence || 'declared_anonymous';
     }
 
-    const usable = record.fields.amount !== undefined || record.fields.receiver !== undefined;
-    if (!usable) {
+    // A donation is a sum and somebody party to it. Either alone is not one: a
+    // party name with no amount is a name that appeared on the page, and an
+    // amount with no party is a figure nobody can be asked about.
+    //
+    // The looser test this replaces — amount *or* receiver — admitted records
+    // whose only surviving field was a recipient. That is exactly how a
+    // fabricated record survives grounding: the invented amount and donor are
+    // dropped for not being quoted, the recipient's name genuinely does appear
+    // on the page, and what is left is recorded as a donation.
+    const hasParty =
+        record.fields.sender !== undefined ||
+        record.fields.receiver !== undefined ||
+        record.fields.identity_absence !== undefined;
+    if (record.fields.amount === undefined || !hasParty) {
         return {
             ok: false,
             index,

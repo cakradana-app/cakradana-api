@@ -62,8 +62,11 @@ test('a value not quoted from the document is dropped', () => {
         FOLDED,
         0,
     );
-    assert.equal(result.record.fields.amount, undefined);
     assert.match(result.rejections.join(' '), /not quoted from the document/);
+    // And with the amount gone there is no donation left to record. A party
+    // name with no sum is a name that appeared on the page.
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /identify a donation/);
 });
 
 test('a record survives with its sound fields when one field is unusable', () => {
