@@ -1091,6 +1091,76 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /service/monitoring/model-health:
+    get:
+      tags:
+        - Operations
+      summary: What the model is doing in production
+      description: |
+        Proxied from the scoring service, which must not be reachable from a
+        browser: it accepts donation records and returns judgements about named
+        people, and exposing it publicly so a dashboard can read one endpoint
+        would be a poor trade.
+
+        Degrades honestly. When the scoring service cannot be reached the
+        response is 200 with `available: false` and the reason, rather than
+        zeros — a dashboard showing zero lanes running is indistinguishable
+        from a system where nothing runs, and only one of those is an
+        emergency.
+
+        Recall is reported as unavailable with its reason. It needs a reviewed
+        random sample of unflagged donations and cannot be derived from scoring
+        events, which describe only what the system surfaced.
+      parameters:
+        - name: window_days
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 30
+        - name: review_budget
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Model health, or a stated inability to obtain it
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/monitoring/alerts:
+    get:
+      tags:
+        - Operations
+      summary: Structural clusters from the last detection pass
+      description: |
+        Group alerts describe a set of donations rather than one. They are not
+        published and are not part of the public dataset: a cluster is a
+        hypothesis about a set of people, and one nobody has looked at should
+        not leave the review surface.
+      responses:
+        '200':
+          description: Alerts, or a stated inability to obtain them
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /public/aggregates:
     get:
       tags:

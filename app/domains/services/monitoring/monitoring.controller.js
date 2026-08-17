@@ -1,0 +1,98 @@
+/**
+ * Model health, proxied.
+ *
+ * The scoring service holds these figures and must not be reachable from a
+ * browser: it accepts donation records and returns judgements about named
+ * people, and putting it on a public network so a dashboard can read one
+ * endpoint would be a poor trade.
+ *
+ * So this proxies. It also degrades honestly — when the scoring service cannot
+ * be reached, the response says the figures are unavailable rather than
+ * returning zeros. A dashboard showing zero lanes running looks identical to a
+ * system where nothing is running, and only one of those is an emergency.
+ */
+
+const scoring = require('../../../utils/scoring/client');
+const { record } = require('../../canonical/retention');
+
+const health = async (req, res) => {
+    try {
+        const windowDays = Number.parseInt(req.query.window_days, 10) || 30;
+        const reviewBudget =
+            Number.parseInt(req.query.review_budget, 10) ||
+            Number.parseInt(process.env.REVIEW_BUDGET, 10) ||
+            null;
+
+        const report = await scoring.modelHealth({ windowDays, reviewBudget });
+
+        await record({
+            actor: req.user?.email || null,
+            action: 'read-model-health',
+            subjectType: 'Model',
+        });
+
+        return res.status(200).json({
+            status: 'success',
+            message: 'Model health',
+            data: { available: true, ...report },
+        });
+    } catch (err) {
+        if (err.name === 'ScoringUnavailable') {
+            // 200 with `available: false` rather than an error status: the
+            // request succeeded and the answer is that the figures cannot be
+            // obtained. A 5xx here would make a dashboard show a failure of
+            // itself rather than of the thing it monitors.
+            return res.status(200).json({
+                status: 'success',
+                message: 'Model health is unavailable',
+                data: {
+                    available: false,
+                    reason: err.message,
+                    note:
+                        'the scoring service could not be reached; these figures are ' +
+                        'unknown rather than zero',
+                },
+            });
+        }
+        console.error('Error reading model health:', err);
+        return res.status(500).json({
+            status: 'error',
+            message: process.env.DEBUG ? err.message : 'Internal Server Error',
+            data: {},
+        });
+    }
+};
+
+/**
+ * Structural clusters, as the last detection pass left them.
+ *
+ * Group alerts are not published and are not part of the public dataset: a
+ * cluster is a hypothesis about a set of people, and one that has not been
+ * looked at by anybody should not leave the review surface.
+ */
+const alerts = async (req, res) => {
+    try {
+        const report = await scoring.groupAlerts();
+        return res.status(200).json({
+            status: 'success',
+            message: 'Structural alerts',
+            data: { available: true, ...report },
+        });
+    } catch (err) {
+        if (err.name === 'ScoringUnavailable') {
+            return res.status(200).json({
+                status: 'success',
+                message: 'Structural alerts are unavailable',
+                data: { available: false, reason: err.message, alerts: [] },
+            });
+        }
+        console.error('Error reading structural alerts:', err);
+        return res.status(500).json({
+            status: 'error',
+            message: process.env.DEBUG ? err.message : 'Internal Server Error',
+            data: {},
+        });
+    }
+};
+
+module.exports = { health, alerts };

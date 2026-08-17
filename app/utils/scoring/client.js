@@ -122,6 +122,45 @@ async function post(path, body, timeoutMs = DEFAULT_TIMEOUT_MS) {
 }
 
 /**
+ * Read from the scoring service.
+ *
+ * Separate from `post` because the failure semantics differ: a read that fails
+ * degrades a dashboard, while a write that fails leaves a donation unscored.
+ */
+async function get(path, timeoutMs = DEFAULT_TIMEOUT_MS) {
+    if (!isConfigured()) {
+        throw new ScoringUnavailable(
+            'SCORING_SERVICE_URL and SCORING_SERVICE_TOKEN must both be set',
+        );
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const response = await fetch(`${baseUrl()}${path}`, {
+            headers: {
+                Authorization: `Bearer ${process.env.SCORING_SERVICE_TOKEN}`,
+                ...(correlationId() ? { 'x-correlation-id': correlationId() } : {}),
+            },
+            signal: controller.signal,
+        });
+        if (!response.ok) {
+            throw new ScoringUnavailable(`scoring service returned ${response.status}`);
+        }
+        return response.json();
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            throw new ScoringUnavailable(`scoring service did not respond within ${timeoutMs}ms`);
+        }
+        throw error instanceof ScoringUnavailable
+            ? error
+            : new ScoringUnavailable(`scoring service unreachable: ${error.message}`);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/**
  * Persist a scoring result against the donation version it judged.
  *
  * Events accumulate rather than replace. A re-score is a new event, so an
@@ -220,7 +259,19 @@ async function scoreMany(donations, { requestId = null } = {}) {
     }
 }
 
+async function modelHealth({ windowDays = 30, reviewBudget = null } = {}) {
+    const params = new URLSearchParams({ window_days: String(windowDays) });
+    if (reviewBudget) params.set('review_budget', String(reviewBudget));
+    return get(`/v1/model-health?${params.toString()}`);
+}
+
+async function groupAlerts() {
+    return get('/v1/alerts');
+}
+
 module.exports = {
+    modelHealth,
+    groupAlerts,
     scoreDonation,
     scoreMany,
     toPayload,
