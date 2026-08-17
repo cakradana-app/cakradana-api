@@ -255,7 +255,7 @@ test('the survivor carries the absorbed record’s names, registers and dates', 
     const observed = await makeEntity('Budi Santosa', {
         aliases: ['Bpk. Budi Santosa'],
         normalisedAliases: [normaliseName('Bpk. Budi Santosa')],
-        identifiers: [{ scheme: 'nik', valueRef: 'ref-a' }],
+        identifiers: [{ scheme: 'nik', valueRef: `idref_${'a'.repeat(32)}` }],
         registers: ['prohibited-source'],
         firstSeen: early,
         lastSeen: new Date('2026-01-01T00:00:00Z'),

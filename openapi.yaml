@@ -1152,6 +1152,187 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /service/identifiers/status:
+    get:
+      tags:
+        - Identifiers
+      summary: Whether this deployment can hold identifiers
+      description: |
+        Discloses nothing about any person. Reported rather than left to be
+        inferred from an error on first use: a deployment that cannot store
+        identifiers resolves entities on names alone, which is a materially
+        weaker basis and one an operator should know about before it matters.
+      responses:
+        '200':
+          description: Identifier storage status
+        '403':
+          description: Not permitted for this role
+
+  /service/identifiers:
+    post:
+      tags:
+        - Identifiers
+      summary: Record an identifier for an entity
+      description: |
+        The value is encrypted and held in its own collection. What reaches the
+        entity document is the surrogate this returns, and the entity schema
+        refuses anything that is not one — so a later caller cannot quietly put
+        a number in its place.
+
+        Refused with 503 when the deployment has no key. There is no fallback
+        to storing the value in the clear: a failure to protect something must
+        not present as having stored it safely.
+
+        Refused with 409 when the identifier is already recorded against a
+        different entity. That is the strongest evidence this system can have
+        that two records are one person, and is a resolution decision rather
+        than something to record twice.
+
+        Not waivable by `ENFORCE_ROLES`: a value held is a value that can leak.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entity_id, scheme, value]
+              properties:
+                entity_id:
+                  type: string
+                scheme:
+                  type: string
+                  enum: [nik, npwp, passport, company-registration, party-registration]
+                value:
+                  type: string
+                  description: |
+                    The identifier. Punctuation is normalised away, so one
+                    number written two ways is one identifier.
+                validated_against:
+                  type: string
+                  nullable: true
+                  description: |
+                    The register the value was checked against, if any. An
+                    unvalidated identifier is somebody's claim about themselves.
+      responses:
+        '201':
+          description: Identifier recorded
+        '200':
+          description: Already recorded for this entity
+        '400':
+          description: Missing actor, entity, scheme, or value
+        '403':
+          description: Not permitted for this role, whether or not enforcement is on
+        '404':
+          description: No such entity
+        '409':
+          description: Already recorded against another entity, or the entity was merged away
+        '503':
+          description: No key configured; the value is refused rather than stored unprotected
+
+  /service/identifiers/match:
+    post:
+      tags:
+        - Identifiers
+      summary: Whether any entity holds this identifier
+      description: |
+        Answers the question resolution actually asks without disclosing
+        anything: the caller supplies a value they already hold and learns
+        whether the system knows it, never the other way round. The value is
+        not echoed, and matching happens on a keyed hash rather than the value.
+
+        Separate from reading on purpose. Deciding whether two records describe
+        one person is the common operation; keeping it in the same call as
+        reading would make every match a disclosure.
+
+        Still recorded, because a caller enumerating identifiers to discover
+        which exist does so one request at a time, and that pattern is only
+        visible in a log.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scheme, value]
+              properties:
+                scheme:
+                  type: string
+                value:
+                  type: string
+      responses:
+        '200':
+          description: Whether the identifier is known, and to which entity
+        '400':
+          description: Missing actor, scheme, or value
+        '403':
+          description: Not permitted for this role, whether or not enforcement is on
+
+  /service/identifiers/{ref}/reveal:
+    post:
+      tags:
+        - Identifiers
+      summary: Read an identifier value
+      description: |
+        The one call that is a disclosure, and the rare one. A reason is
+        required and cannot be defaulted: a log of reads nobody had to justify
+        records who looked and not why, and only the second is any use when the
+        question is whether a disclosure should have happened.
+
+        The read is written to the entity's access record and is disclosable to
+        the subject. An attempt against a surrogate that does not exist is
+        recorded too, so somebody probing leaves a trace.
+
+        Not waivable by `ENFORCE_ROLES`: a value read cannot be un-read, so
+        there is no shadow-mode version of it.
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The surrogate held on the entity document.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: The identifier value, with its disclosure recorded
+        '400':
+          description: Missing actor or reason
+        '403':
+          description: Not permitted for this role, whether or not enforcement is on
+        '404':
+          description: No such identifier
+
+  /service/identifiers/entity/{id}:
+    get:
+      tags:
+        - Identifiers
+      summary: What an entity is identified by, without the values
+      description: |
+        The safe view, and the one nearly everything wants: whether a party is
+        identified at all, by what, and whether anybody checked. The identity
+        basis shown on the network view, the case bundle, and the report draft
+        is this question, and none of them needs a number to answer it.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The schemes held, their surrogates, and their validation state
+        '403':
+          description: Not permitted for this role
+
   /service/monitoring/model-health:
     get:
       tags:
@@ -3361,6 +3542,14 @@ tags:
       Deciding whether two names are one donor. Resolution sets the accuracy
       ceiling of every cumulative rule: a donor split across spellings is
       several donors, each under the limit.
+  - name: Identifiers
+    description: |
+      Strong identifiers — NIK, NPWP, passport numbers — held in their own
+      collection, encrypted, and reached only through here. The entity document
+      carries a surrogate and the schema refuses anything else, so the
+      separation is structural rather than a convention. Matching is separated
+      from reading so that deciding whether two records are one person is not a
+      disclosure; reading a value is, and requires a recorded reason.
   - name: Quarantine
     description: |
       Records that could not be admitted, and the work of correcting them.

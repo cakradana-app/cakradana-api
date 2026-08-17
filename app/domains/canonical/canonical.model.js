@@ -149,9 +149,25 @@ const identifierSchema = new mongoose.Schema(
     {
         scheme: { type: String, required: true },
         // A surrogate reference, never the identifier itself. Strong
-        // identifiers are held separately with their own access control, and
-        // feature computation and training see only the surrogate.
-        valueRef: { type: String, required: true },
+        // identifiers are held in their own collection with their own access
+        // control, and feature computation and training see only the
+        // surrogate.
+        //
+        // The shape is enforced rather than described. "Never the identifier
+        // itself" was a comment, and a comment is what somebody with a NIK and
+        // a deadline writes past: the field took any string, so the whole
+        // separation rested on every future caller having read this paragraph.
+        // A value that is not a surrogate is now refused by the schema, which
+        // is the same guarantee without depending on anybody.
+        valueRef: {
+            type: String,
+            required: true,
+            match: [
+                /^idref_[0-9a-f]{32}$/,
+                'valueRef must be a surrogate issued by the identifier store, not an ' +
+                    'identifier value. Record the value at POST /service/identifiers.',
+            ],
+        },
         validated: { type: Boolean, default: false },
     },
     { _id: false },

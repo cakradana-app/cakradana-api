@@ -1,0 +1,364 @@
+/**
+ * The only way in or out of the identifier store.
+ *
+ * Every read of an identifier value is a disclosure of the most identifying
+ * thing this system holds about a person, so every read is recorded with who
+ * made it and why. A reason is required and cannot be defaulted: an access log
+ * full of entries nobody had to justify answers "who looked" and not "why",
+ * and only the second is any use when the question is whether a disclosure
+ * should have happened.
+ *
+ * Matching is separated from reading on purpose. Deciding whether two records
+ * describe one person is the common operation and does not need the value;
+ * reading the value is rare, and is the one that has to be justified. Keeping
+ * them the same call would make every match a disclosure.
+ */
+
+const { Entity } = require('../canonical/canonical.model');
+const { record } = require('../canonical/retention');
+const {
+    EntityIdentifier,
+    IDENTIFIER_SCHEMES,
+    IdentifierSecretsMissing,
+    lookupHash,
+    encrypt,
+    decrypt,
+    configured,
+} = require('./identifier.model');
+
+function fail(res, status, message, data = {}) {
+    return res.status(status).json({ status: 'error', message, data });
+}
+
+function serverError(res, err, context) {
+    console.error(`${context}:`, err);
+    return res.status(500).json({
+        status: 'error',
+        message: process.env.DEBUG ? err.message : 'Internal Server Error',
+        data: {},
+    });
+}
+
+/**
+ * Refuse rather than degrade when the store is not configured.
+ *
+ * 503 and not 500: nothing is broken, the deployment has not been given the
+ * secrets. An operator reading this needs to know which.
+ */
+function unconfigured(res, err) {
+    return res.status(503).json({
+        status: 'error',
+        message: err.message,
+        data: {
+            missing: err.missing,
+            // Said plainly, because the tempting workaround is the one thing
+            // that must not happen.
+            not_a_fallback:
+                'identifiers are not stored unencrypted when the key is absent; ' +
+                'the value is refused',
+        },
+    });
+}
+
+/**
+ * Record an identifier for an entity.
+ *
+ * The value never reaches the entity document. What goes there is the
+ * surrogate this returns, and the entity schema refuses anything that is not
+ * one — so a later caller cannot quietly put a number in its place.
+ */
+const mint = async (req, res) => {
+    try {
+        const { entity_id: entityId, scheme, value, validated_against: against } =
+            req.body || {};
+        const actor = req.user?.email || null;
+        if (!actor) return fail(res, 400, 'recording an identifier must name who did it');
+        if (!entityId) return fail(res, 400, 'entity_id is required');
+        if (!IDENTIFIER_SCHEMES.includes(scheme)) {
+            return fail(res, 400, `scheme must be one of: ${IDENTIFIER_SCHEMES.join(', ')}`);
+        }
+        if (!value || String(value).trim() === '') {
+            return fail(res, 400, 'value is required');
+        }
+
+        const entity = await Entity.findById(entityId);
+        if (!entity) return fail(res, 404, 'No such entity');
+        if (entity.mergedInto) {
+            return fail(
+                res,
+                409,
+                'This entity was merged into another record; the identifier belongs ' +
+                    'on the surviving one',
+                { merged_into: entity.mergedInto },
+            );
+        }
+
+        const hash = lookupHash(scheme, value);
+
+        // The same identifier already recorded against a different entity is
+        // the strongest evidence this system can have that two records are one
+        // person — and recording it twice would destroy that evidence by
+        // making both look separately identified.
+        const elsewhere = await EntityIdentifier.findOne({
+            scheme,
+            lookupHash: hash,
+            entityId: { $ne: entity._id },
+        }).lean();
+        if (elsewhere) {
+            await record({
+                actor,
+                action: 'identifier-collision',
+                subjectType: 'Entity',
+                subjectId: String(entity._id),
+                reason: `already recorded against ${elsewhere.entityId}`,
+            });
+            return fail(
+                res,
+                409,
+                'This identifier is already recorded against another entity. That is ' +
+                    'evidence the two are the same party, and is a resolution decision ' +
+                    'rather than something to record twice.',
+                { other_entity_id: elsewhere.entityId, resolve_at: '/service/entities/reviews' },
+            );
+        }
+
+        const existing = await EntityIdentifier.findOne({
+            scheme,
+            lookupHash: hash,
+            entityId: entity._id,
+        }).lean();
+        if (existing) {
+            return res.status(200).json({
+                status: 'success',
+                message: 'This identifier is already recorded for this entity',
+                data: { value_ref: existing.valueRef, scheme, created: false },
+            });
+        }
+
+        const sealed = encrypt(value);
+        const stored = await EntityIdentifier.create({
+            entityId: entity._id,
+            scheme,
+            lookupHash: hash,
+            ...sealed,
+            validated: Boolean(against),
+            validatedAgainst: against || null,
+            recordedBy: actor,
+        });
+
+        // The entity gets the surrogate and nothing else.
+        await Entity.updateOne(
+            { _id: entity._id },
+            { $addToSet: { identifiers: { scheme, valueRef: stored.valueRef, validated: stored.validated } } },
+        );
+
+        await record({
+            actor,
+            action: 'record-identifier',
+            subjectType: 'Entity',
+            subjectId: String(entity._id),
+            reason: `${scheme} recorded`,
+        });
+
+        return res.status(201).json({
+            status: 'success',
+            message: 'Identifier recorded',
+            data: {
+                value_ref: stored.valueRef,
+                scheme,
+                created: true,
+                validated: stored.validated,
+                // Named so a caller does not go looking for the value on the
+                // entity and conclude the record failed.
+                where_the_value_is:
+                    'held encrypted in a separate collection; the entity holds only ' +
+                    'this reference',
+            },
+        });
+    } catch (err) {
+        if (err instanceof IdentifierSecretsMissing) return unconfigured(res, err);
+        return serverError(res, err, 'recording an identifier');
+    }
+};
+
+/**
+ * Which entity, if any, holds this identifier.
+ *
+ * Answers the question resolution actually asks without disclosing anything:
+ * the caller supplies a value they already have and learns whether the system
+ * knows it, never the other way round. The value is not returned and the
+ * request is not a disclosure, so it needs no justification — but it is still
+ * recorded, because a caller enumerating identifiers to find which exist is
+ * doing so one request at a time and that pattern is only visible in a log.
+ */
+const match = async (req, res) => {
+    try {
+        const { scheme, value } = req.body || {};
+        const actor = req.user?.email || null;
+        if (!actor) return fail(res, 400, 'a lookup must name who made it');
+        if (!IDENTIFIER_SCHEMES.includes(scheme)) {
+            return fail(res, 400, `scheme must be one of: ${IDENTIFIER_SCHEMES.join(', ')}`);
+        }
+        if (!value) return fail(res, 400, 'value is required');
+
+        const found = await EntityIdentifier.findOne({
+            scheme,
+            lookupHash: lookupHash(scheme, value),
+        }).lean();
+
+        await record({
+            actor,
+            action: 'match-identifier',
+            subjectType: 'EntityIdentifier',
+            subjectId: found ? String(found.entityId) : null,
+            outcome: found ? 'allowed' : 'denied',
+            reason: `${scheme} lookup`,
+        });
+
+        return res.status(200).json({
+            status: 'success',
+            message: found ? 'Known identifier' : 'No entity holds this identifier',
+            data: {
+                known: Boolean(found),
+                entity_id: found?.entityId || null,
+                validated: found?.validated ?? null,
+                // The value is not echoed. A caller that supplied it has it
+                // already, and echoing it would put it in this response, this
+                // log, and whatever holds either.
+                value_returned: false,
+            },
+        });
+    } catch (err) {
+        if (err instanceof IdentifierSecretsMissing) return unconfigured(res, err);
+        return serverError(res, err, 'matching an identifier');
+    }
+};
+
+/**
+ * Read an identifier value.
+ *
+ * The rare operation, and the one that is a disclosure. A reason is required
+ * and recorded against the entity, so the subject of a disclosure can be told
+ * who read their identifier and what for.
+ */
+const reveal = async (req, res) => {
+    try {
+        const actor = req.user?.email || null;
+        if (!actor) return fail(res, 400, 'reading an identifier must name who did it');
+        const reason = (req.body?.reason || '').trim();
+        if (!reason) {
+            return fail(
+                res,
+                400,
+                'a reason is required to read an identifier value; a log of reads ' +
+                    'nobody had to justify records who looked and not why',
+            );
+        }
+
+        const stored = await EntityIdentifier.findOne({
+            valueRef: req.params.ref,
+        }).lean();
+        if (!stored) {
+            await record({
+                actor,
+                action: 'read-identifier',
+                subjectType: 'EntityIdentifier',
+                subjectId: req.params.ref,
+                outcome: 'denied',
+                reason,
+            });
+            return fail(res, 404, 'No such identifier');
+        }
+
+        const value = decrypt(stored);
+
+        await record({
+            actor,
+            action: 'read-identifier',
+            subjectType: 'Entity',
+            subjectId: String(stored.entityId),
+            outcome: 'allowed',
+            reason,
+        });
+
+        return res.status(200).json({
+            status: 'success',
+            message: 'Identifier value',
+            data: {
+                value_ref: stored.valueRef,
+                scheme: stored.scheme,
+                value,
+                entity_id: stored.entityId,
+                validated: stored.validated,
+                validated_against: stored.validatedAgainst,
+                // Stated in the response because it is the consequence the
+                // reader should be aware of at the moment they read it.
+                disclosure_recorded:
+                    'this read is on the entity’s access record and is disclosable ' +
+                    'to the subject',
+            },
+        });
+    } catch (err) {
+        if (err instanceof IdentifierSecretsMissing) return unconfigured(res, err);
+        return serverError(res, err, 'reading an identifier');
+    }
+};
+
+/**
+ * What an entity is identified by, without any of the values.
+ *
+ * The safe view, and the one nearly everything wants: whether a party is
+ * identified at all, by what, and whether anybody checked. `identityBasis` on
+ * the network view, the case bundle, and the report draft are all this
+ * question, and none of them needs a number to answer it.
+ */
+const forEntity = async (req, res) => {
+    try {
+        const held = await EntityIdentifier.find({ entityId: req.params.id })
+            .select('valueRef scheme validated validatedAgainst createdAt')
+            .lean();
+
+        return res.status(200).json({
+            status: 'success',
+            message: 'Identifiers held for this entity',
+            data: {
+                entity_id: req.params.id,
+                count: held.length,
+                identifiers: held.map((item) => ({
+                    value_ref: item.valueRef,
+                    scheme: item.scheme,
+                    // An unvalidated identifier is somebody's claim about
+                    // themselves, which is a different kind of evidence from
+                    // one checked against the issuing register.
+                    validated: item.validated,
+                    validated_against: item.validatedAgainst,
+                    recorded_at: item.createdAt,
+                })),
+                values_included: false,
+            },
+        });
+    } catch (err) {
+        return serverError(res, err, 'listing identifiers for an entity');
+    }
+};
+
+/** Whether this deployment can hold identifiers at all. */
+const status = async (req, res) => {
+    const usable = configured();
+    return res.status(200).json({
+        status: 'success',
+        message: 'Identifier storage',
+        data: {
+            usable,
+            held: usable ? await EntityIdentifier.countDocuments({}) : null,
+            // Reported rather than inferred from an error on first use. A
+            // deployment that cannot store identifiers resolves entities on
+            // names alone, which is a materially weaker basis and one an
+            // operator should know about before it matters.
+            consequence_when_unusable:
+                'identifiers are refused, so entity resolution rests on names alone',
+        },
+    });
+};
+
+module.exports = { mint, match, reveal, forEntity, status };

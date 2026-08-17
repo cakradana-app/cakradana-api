@@ -18,6 +18,7 @@ const entityRouter = require('./entities/entity.router');
 const caseRouter = require('./cases/case.router');
 const jobRouter = require('./jobs/job.router');
 const monitoringRouter = require('./monitoring/monitoring.router');
+const identifierRouter = require('../identity/identifier.router');
 
 serviceRouter.use('/digital-form', digitalFormRouter);
 serviceRouter.use('/paper-form', paperFormRouter);
@@ -30,5 +31,9 @@ serviceRouter.use('/entities', entityRouter);
 serviceRouter.use('/cases', caseRouter);
 serviceRouter.use('/jobs', jobRouter);
 serviceRouter.use('/monitoring', monitoringRouter);
+// Strong identifiers, in their own collection with their own access
+// control. Mounted here so the route reads as part of the service, and
+// implemented apart from it so nothing joins it to an entity query.
+serviceRouter.use('/identifiers', identifierRouter);
 
 module.exports = serviceRouter;
