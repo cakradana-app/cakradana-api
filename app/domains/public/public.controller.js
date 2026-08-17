@@ -19,6 +19,10 @@ const {
 } = require('./public.model');
 const { log } = require('../../utils/observability/logging');
 
+function refuse(res, message) {
+    return res.status(400).json({ status: 'error', message, data: {} });
+}
+
 /** Quarter of the year a date falls in, which is the coarsest useful period. */
 function periodOf(date) {
     const d = new Date(date);
@@ -91,7 +95,15 @@ async function materialise({ now = new Date() } = {}) {
                   'identify them by arithmetic against any known donation'
                 : null,
             materialisedAt: now,
-            sourceRecords: cell.donationCount,
+            // Suppressed here too, which it was not. It is provenance — how
+            // many records the cell was built from — and for a suppressed cell
+            // that is the number suppression exists to withhold, stored under a
+            // different name in the collection described as the published
+            // dataset. No endpoint served it, so nothing leaked; but the whole
+            // design rests on this collection containing only what may be
+            // published, so that nobody has to remember which of its fields are
+            // safe when the next endpoint is written.
+            sourceRecords: suppressed ? 0 : cell.donationCount,
         };
     });
 
@@ -124,9 +136,28 @@ async function materialise({ now = new Date() } = {}) {
  */
 const dataset = async (req, res) => {
     try {
+        // Express parses `?period[$ne]=x` into an object, which reaches mongoose
+        // as an operator rather than a value. On this endpoint that is worse
+        // than elsewhere: it is the one route with no token in front of it, so
+        // a `$regex` supplied by anybody at all becomes a query the database
+        // runs. The values are checked for shape rather than passed through —
+        // a period is a quarter and an electoral context is a plain label, and
+        // neither has a legitimate form that a string cannot express.
         const filter = {};
-        if (req.query.period) filter.period = req.query.period;
-        if (req.query.electoral_context) filter.electoralContext = req.query.electoral_context;
+        const period = req.query.period;
+        if (period !== undefined) {
+            if (typeof period !== 'string' || !/^\d{4}-Q[1-4]$/.test(period)) {
+                return refuse(res, 'period must be a quarter, as YYYY-Qn');
+            }
+            filter.period = period;
+        }
+        const context = req.query.electoral_context;
+        if (context !== undefined) {
+            if (typeof context !== 'string' || context.length > 200) {
+                return refuse(res, 'electoral_context must be a single label');
+            }
+            filter.electoralContext = context;
+        }
 
         const cells = await PublicAggregate.find(filter)
             .sort({ totalIdr: -1 })
