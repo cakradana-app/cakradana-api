@@ -88,8 +88,33 @@ async function materialise({ now = new Date(), allowEmpty = false } = {}) {
         .select('receiverRef senderRef amountIdr occurredAt electoralContext')
         .lean();
 
-    const entities = await Entity.find({}).select('canonicalName entityType').lean();
+    const entities = await Entity.find({})
+        .select('canonicalName entityType mergedInto')
+        .lean();
     const byId = new Map(entities.map((e) => [String(e._id), e]));
+
+    /**
+     * The entity a record now belongs to, following merges to the end.
+     *
+     * Both sides have to resolve through this. A merge repoints the donations
+     * to the survivor and tombstones the absorbed record, so the recomputed
+     * cell is keyed on the survivor while the cell already published is keyed
+     * on the entity that no longer receives anything. Resolving only the
+     * recomputed side left them under different keys, which is the same failure
+     * as keying on the name: the freeze finds nothing to carry forward and
+     * publishes the current figures as new.
+     */
+    const survivor = (id) => {
+        let current = id ? String(id) : null;
+        const seen = new Set();
+        while (current && !seen.has(current)) {
+            seen.add(current);
+            const next = byId.get(current)?.mergedInto;
+            if (!next) return current;
+            current = String(next);
+        }
+        return current;
+    };
 
     const cells = new Map();
     for (const donation of donations) {
@@ -106,8 +131,18 @@ async function materialise({ now = new Date(), allowEmpty = false } = {}) {
         // with every donation admitted, and publishing the sequence is
         // publishing the donations.
         if (!periodIsClosed(period, now)) continue;
-        const key = `${receiver.canonicalName}|${donation.electoralContext || ''}|${period}`;
+        // Keyed on the recipient's identity, not on what it is currently
+        // called. Keyed on the name, a merge moved a published cell to a new
+        // key: the recomputed cell found no previously published figures to
+        // carry forward, so it published the current ones as if new — releasing
+        // the difference between two releases, with a fresh publication date
+        // and nothing saying a figure had moved. That is the leak this design
+        // exists to prevent, arrived at through a routine merge of exactly the
+        // near-duplicate party names this data produces.
+        const receiverKey = survivor(receiver._id);
+        const key = `${receiverKey}|${donation.electoralContext || ''}|${period}`;
         const cell = cells.get(key) || {
+            recipientKey: receiverKey,
             recipientName: receiver.canonicalName,
             recipientType: receiver.entityType,
             electoralContext: donation.electoralContext || null,
@@ -128,20 +163,36 @@ async function materialise({ now = new Date(), allowEmpty = false } = {}) {
     // exactly what an observer differences. A closed quarter's figures should
     // not move anyway — when they do it is a correction, and a correction
     // released silently is indistinguishable from the leak.
-    const published = new Map(
-        (await PublicAggregate.find({ firstPublishedAt: { $ne: null } }).lean()).map(
-            (cell) => [
-                `${cell.recipientName}|${cell.electoralContext || ''}|${cell.period}`,
-                cell,
-            ],
-        ),
-    );
+    // Indexed by identity, and by name as well for cells published before the
+    // key existed. Without the second, the release that introduced identity
+    // keying would have found no previously published cell for anything and
+    // republished the lot with current figures — releasing every difference at
+    // once, which is the leak the freeze exists to prevent, caused by the fix
+    // for it.
+    const published = new Map();
+    for (const cell of await PublicAggregate.find({
+        firstPublishedAt: { $ne: null },
+    }).lean()) {
+        const suffix = `${cell.electoralContext || ''}|${cell.period}`;
+        // Resolved through any merge that has happened since it was
+        // published, so a cell published under a record later absorbed is found
+        // under whoever absorbed it.
+        if (cell.recipientKey) {
+            published.set(`${survivor(cell.recipientKey)}|${suffix}`, cell);
+        }
+        // The legacy key. Set only when nothing already claims it, so a real
+        // identity key always wins.
+        const legacy = `name:${cell.recipientName}|${suffix}`;
+        if (!published.has(legacy)) published.set(legacy, cell);
+    }
 
     const documents = [...cells.values()].map((cell) => {
         const donorCount = cell.donors.size;
         const suppressed = donorCount < MIN_DONORS_PER_CELL;
-        const key = `${cell.recipientName}|${cell.electoralContext || ''}|${cell.period}`;
-        const already = published.get(key);
+        const suffix = `${cell.electoralContext || ''}|${cell.period}`;
+        const key = `${cell.recipientKey}|${suffix}`;
+        const already =
+            published.get(key) || published.get(`name:${cell.recipientName}|${suffix}`);
         if (already) {
             const moved =
                 already.donorCount !== (suppressed ? 0 : donorCount) ||
@@ -151,6 +202,12 @@ async function materialise({ now = new Date(), allowEmpty = false } = {}) {
             return {
                 ...already,
                 _id: undefined,
+                // The identity key follows the merge; the figures do not. It is
+                // a pointer to whoever the cell now belongs to, not something
+                // published, and leaving it on the absorbed record meant the
+                // carry-forward pass no longer recognised the cell and emitted
+                // a second copy of it.
+                recipientKey: cell.recipientKey,
                 materialisedAt: now,
                 revisionPending: moved,
                 revisionNote: moved
@@ -161,6 +218,7 @@ async function materialise({ now = new Date(), allowEmpty = false } = {}) {
             };
         }
         return {
+            recipientKey: cell.recipientKey,
             recipientName: cell.recipientName,
             recipientType: cell.recipientType,
             electoralContext: cell.electoralContext,
@@ -191,6 +249,52 @@ async function materialise({ now = new Date(), allowEmpty = false } = {}) {
             revisionNote: null,
         };
     });
+
+    // A published cell whose sources have all gone is carried forward, not
+    // dropped. `documents` is built from live donations, so a cell every one of
+    // whose donations was superseded — by a correction, or by an upheld dispute,
+    // which marks records for exactly this — simply did not appear, and the
+    // wholesale replace then removed it. "A figure published once is frozen"
+    // was therefore untrue in the one direction nobody would look for, and by
+    // this module's own reasoning a cell that vanishes reads as an absence of
+    // donations. A published cell disappearing between two releases is itself a
+    // differencing observation.
+    // Only when something was rebuilt. A rebuild that produced nothing at all
+    // is a different event from a cell whose own donations went: every
+    // publishable cell disappearing at once is far more likely an upstream
+    // failure — resolution stopped, the donation query returned nothing — and
+    // `swapIn` refuses that outright rather than letting it through. Carrying
+    // the whole previous dataset forward here would make that refusal
+    // unreachable and dress an upstream failure as a set of frozen cells.
+    const rebuilt = new Set();
+    if (documents.length > 0) {
+    for (const d of documents) {
+        const suffix = `${d.electoralContext || ''}|${d.period}`;
+        rebuilt.add(`${d.recipientKey}|${suffix}`);
+        rebuilt.add(`name:${d.recipientName}|${suffix}`);
+    }
+    const carried = new Set();
+        for (const [key, already] of published) {
+            if (rebuilt.has(key)) continue;
+            // Deduped on the document, not on the key. A published cell is
+            // indexed under its identity and under its old name, so a cell
+            // reachable only under one of those would otherwise be carried
+            // forward twice and published as two cells.
+            const identity = String(already._id);
+            if (carried.has(identity)) continue;
+            carried.add(identity);
+            documents.push({
+                ...already,
+                _id: undefined,
+                materialisedAt: now,
+                revisionPending: true,
+                revisionNote:
+                    'no live donation now resolves to this cell; the published ' +
+                    'figures are unchanged because removing them would itself ' +
+                    'disclose that they changed',
+            });
+        }
+    }
 
     // Replaced wholesale rather than upserted. An incremental build that misses
     // a deletion leaves a published figure for a record that has since been

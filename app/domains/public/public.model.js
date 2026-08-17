@@ -30,6 +30,17 @@ const publicAggregateSchema = new mongoose.Schema(
     {
         // What the cell groups by. Recipient and period only: adding donor
         // attributes would narrow cells until they identify people.
+        // The recipient's identity, following a merge. The cell was keyed on
+        // the name, and a merge therefore moved it to a new key and released
+        // the difference between two releases as if it were a new cell.
+        //
+        // Not required, because a cell published before this existed has none,
+        // and refusing those would make the upgrade drop every published cell —
+        // which is the disappearance this freeze exists to prevent, caused by
+        // the fix for it. The rebuild always sets it; an absent one means the
+        // document predates the change, and the carry-forward falls back to
+        // matching on the name for exactly those.
+        recipientKey: { type: String, default: null },
         recipientName: { type: String, required: true },
         recipientType: { type: String, required: true },
         electoralContext: { type: String, default: null },
@@ -63,6 +74,7 @@ const publicAggregateSchema = new mongoose.Schema(
     { timestamps: true },
 );
 
+publicAggregateSchema.index({ period: 1, recipientKey: 1 });
 publicAggregateSchema.index({ period: 1, recipientName: 1 });
 publicAggregateSchema.index({ materialisedAt: -1 });
 
@@ -138,14 +150,6 @@ const PublicAggregate = mongoose.model('PublicAggregate', publicAggregateSchema)
 const BUILDING_COLLECTION = 'publicaggregates_building';
 
 /**
- * What each rebuild did.
- *
- * A failed build leaves the previous dataset in place, which is the right
- * behaviour and an invisible one: the endpoint keeps answering and nothing says
- * the figures stopped being refreshed. This is where that is visible, and it is
- * why failures are recorded as well as successes.
- */
-/**
  * The same schema, bound to the staging collection.
  *
  * A rebuild is written through this rather than through the raw driver, so that
@@ -165,6 +169,14 @@ const PublicAggregateStaging = mongoose.model(
     BUILDING_COLLECTION,
 );
 
+/**
+ * What each rebuild did.
+ *
+ * A failed build leaves the previous dataset in place, which is the right
+ * behaviour and an invisible one: the endpoint keeps answering and nothing says
+ * the figures stopped being refreshed. This is where that is visible, and it is
+ * why failures are recorded as well as successes.
+ */
 const publicDatasetBuildSchema = new mongoose.Schema(
     {
         startedAt: { type: Date, required: true },

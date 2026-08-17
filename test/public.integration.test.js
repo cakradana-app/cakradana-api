@@ -239,10 +239,23 @@ test('no served cell carries a score, band, or flag under any name', async () =>
     await controller.materialise();
 
     const sent = await serve();
-    const body = JSON.stringify(sent.body).toLowerCase();
-    for (const forbidden of ['"score"', '"band"', '"risk_score"', '"flags"', '"alerts"']) {
-        assert.equal(body.includes(forbidden), false, `the response carries ${forbidden}`);
+    // Matched on the cells rather than on the whole envelope, and on words
+    // rather than five exact keys. The envelope legitimately names what it
+    // excludes — "risk scores, flags, structural alerts" — so scanning the
+    // whole body could only ever be a check on five literal spellings, and
+    // `behavioural_score` would have passed it. The cells are what the test is
+    // named for and what must carry no verdict under any name.
+    const served = JSON.stringify(sent.body.data.cells).toLowerCase();
+    for (const forbidden of ['score', 'band', 'risk', 'finding', 'flag', 'alert', 'verdict']) {
+        assert.equal(
+            served.includes(forbidden),
+            false,
+            `a served cell carries the word "${forbidden}"`,
+        );
     }
+    // And the envelope still declares the exclusion, which is a different
+    // claim and worth keeping.
+    assert.match(sent.body.data.excludes, /risk scores/);
 });
 
 test('the operations view counts without naming anybody', async () => {
@@ -444,4 +457,91 @@ test('the build date survives a filter that matches nothing', async () => {
         empty.body.data.materialised_at,
         'an empty filtered answer reported no build date',
     );
+});
+
+test('a merge does not release the difference as a new cell', async () => {
+    // The cell was keyed on the recipient's current name, so a merge moved it
+    // to a new key: the rebuild found no previously published figures to carry
+    // forward and published the current ones as new, with a fresh publication
+    // date and nothing saying a figure had moved. The delta across those two
+    // releases is one donor and one amount against a named recipient — the leak
+    // the freeze exists to prevent, reached through a routine merge of exactly
+    // the near-duplicate party names this data produces.
+    const party = await makeEntity('Partai Maju', 'political-party');
+    for (let index = 0; index < MIN_DONORS_PER_CELL; index += 1) {
+        const donor = await makeEntity(`Donor ${index}`);
+        await donate(donor, party, 10_000_000, `merge-${index}`);
+    }
+    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+
+    const first = await PublicAggregate.findOne({}).lean();
+    assert.equal(first.donorCount, MIN_DONORS_PER_CELL);
+    assert.equal(first.totalIdr, 50_000_000);
+
+    // A late donation for the same closed quarter, and then the party's two
+    // spellings merged, exactly as the resolution review does it.
+    const late = await makeEntity('Donor late');
+    await donate(late, party, 250_000_000, 'merge-late');
+    const survivor = await makeEntity('Partai Maju Bersatu', 'political-party');
+    // A real merge repoints the donations as well as tombstoning the absorbed
+    // record. Setting `mergedInto` alone leaves every donation still resolving
+    // to the old name, so the cell key never moves and the test passes without
+    // reproducing anything — which is what it did before this line was added.
+    await Donation.updateMany(
+        { 'receiverRef.entityId': party._id },
+        { $set: { 'receiverRef.entityId': survivor._id } },
+    );
+    await Entity.updateOne({ _id: party._id }, { $set: { mergedInto: survivor._id } });
+
+    await controller.materialise({ now: new Date('2026-08-02T00:00:00Z') });
+
+    const cells = await PublicAggregate.find({}).lean();
+    assert.equal(cells.length, 1, 'the merge produced a second cell');
+    assert.equal(
+        cells[0].donorCount,
+        MIN_DONORS_PER_CELL,
+        'the merge released the new donor',
+    );
+    assert.equal(cells[0].totalIdr, first.totalIdr, 'the merge released the new amount');
+    assert.equal(cells[0].revisionPending, true);
+    assert.equal(
+        cells[0].firstPublishedAt.getTime(),
+        first.firstPublishedAt.getTime(),
+        'the merge reset the publication date, hiding that a figure moved',
+    );
+});
+
+test('a published cell whose donations all vanish is frozen, not deleted', async () => {
+    // `documents` is built from live donations, so a cell whose every donation
+    // was superseded simply did not appear and the wholesale replace removed
+    // it. By this module's own reasoning a cell that vanishes reads as an
+    // absence of donations, and a published cell disappearing between two
+    // releases is itself a differencing observation. Reachable through an
+    // upheld dispute, which marks records for exactly this.
+    const going = await cellWith(MIN_DONORS_PER_CELL);
+    const staying = await makeEntity('Partai Lain', 'political-party');
+    for (let index = 0; index < MIN_DONORS_PER_CELL; index += 1) {
+        const donor = await makeEntity(`Other donor ${index}`);
+        await donate(donor, staying, 10_000_000, `stay-${index}`);
+    }
+    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+    assert.equal(await PublicAggregate.countDocuments({}), 2);
+
+    // Every donation to one recipient corrected away.
+    const superseding = await Donation.findOne({ 'receiverRef.entityId': staying._id });
+    await Donation.updateMany(
+        { 'receiverRef.entityId': going._id },
+        { $set: { supersededBy: superseding._id } },
+    );
+    await controller.materialise({ now: new Date('2026-08-02T00:00:00Z') });
+
+    const names = (await PublicAggregate.find({}).lean()).map((c) => c.recipientName);
+    assert.ok(
+        names.includes('Partai Maju'),
+        'a published cell was deleted when its donations were superseded',
+    );
+    const frozen = await PublicAggregate.findOne({ recipientName: 'Partai Maju' }).lean();
+    assert.equal(frozen.donorCount, MIN_DONORS_PER_CELL);
+    assert.equal(frozen.revisionPending, true);
+    assert.match(frozen.revisionNote, /no live donation now resolves/);
 });
