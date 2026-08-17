@@ -190,26 +190,87 @@ test('the prompt does not depend on which profile is configured', () => {
     else process.env.LLM_PROVIDER = previous;
 });
 
-test('identical model output extracts identically under either profile', async () => {
-    // The claim that matters: the same document and the same model response
-    // produce the same record, whichever deployment produced the response.
-    const document = 'Budi Santoso menyumbang Rp10.000.000 pada 5 Juni 2026.';
+test('the same document extracts identically through either adapter', async () => {
+    // The claim that matters, and the earlier version of this test did not
+    // check it: `extractDonations` skips `createProvider()` entirely when a
+    // provider is passed in, so stubbing the provider and flipping
+    // LLM_PROVIDER around it asserted f(x) === f(x). It could not fail however
+    // far the two adapters diverged — the one thing this file exists to catch.
+    //
+    // Each side now goes through the real adapter, built by createProvider()
+    // under its own profile, with only the HTTP layer scripted.
+    const document =
+        'Budi Santoso menyumbang Rp10.000.000 kepada Partai Maju pada 5 Juni 2026.';
     const modelReply = JSON.stringify([
         {
-            sender_name: { value: 'Budi Santoso', span: 'Budi Santoso' },
-            amount_idr: { value: 'Rp10.000.000', span: 'Rp10.000.000' },
-            occurred_at: { value: '2026-06-05', span: '5 Juni 2026' },
+            sender: 'Budi Santoso',
+            sender_span: 'Budi Santoso',
+            receiver: 'Partai Maju',
+            receiver_span: 'Partai Maju',
+            amount: 'Rp10.000.000',
+            amount_span: 'Rp10.000.000',
+            date: '2026-06-05',
+            date_span: '5 Juni 2026',
         },
     ]);
-    const scripted = { complete: async () => modelReply };
 
     const previous = process.env.LLM_PROVIDER;
-    process.env.LLM_PROVIDER = 'openrouter';
-    const hosted = await extractDonations(document, { provider: scripted });
-    process.env.LLM_PROVIDER = 'self-hosted';
-    const selfHosted = await extractDonations(document, { provider: scripted });
-    if (previous === undefined) delete process.env.LLM_PROVIDER;
-    else process.env.LLM_PROVIDER = previous;
+    const originalFetch = global.fetch;
+    const sent = [];
+    global.fetch = async (url, init) => {
+        sent.push({ url, body: JSON.parse(init.body) });
+        return {
+            ok: true,
+            json: async () => ({ choices: [{ message: { content: modelReply } }] }),
+        };
+    };
 
-    assert.deepEqual(selfHosted, hosted);
+    try {
+        providers(ENV);
+        process.env.LLM_PROVIDER = 'openrouter';
+        const hosted = await extractDonations(document, { provider: createProvider() });
+
+        process.env.LLM_PROVIDER = 'self-hosted';
+        const selfHosted = await extractDonations(document, { provider: createProvider() });
+
+        // Both adapters were genuinely exercised, and against different hosts.
+        assert.equal(sent.length, 2);
+        assert.match(sent[0].url, /openrouter\.example/);
+        assert.match(sent[1].url, /inference\.internal/);
+
+        // The detection output is identical. `provider` and `sentOffPremise`
+        // are the one permitted difference — they record which adapter ran and
+        // whether the document left the premises, which is the whole reason
+        // two adapters exist, and are provenance rather than findings.
+        const { provider: _a, sentOffPremise: offPremise, ...hostedFindings } = hosted;
+        const {
+            provider: _b,
+            sentOffPremise: onPremise,
+            ...selfHostedFindings
+        } = selfHosted;
+        assert.deepEqual(selfHostedFindings, hostedFindings);
+        assert.equal(offPremise, true);
+        assert.equal(onPremise, false);
+
+        assert.equal(hosted.donations.length, 1);
+        assert.equal(hosted.donations[0].fields.amount, 10_000_000);
+        assert.equal(hosted.donations[0].fields.sender, 'Budi Santoso');
+    } finally {
+        global.fetch = originalFetch;
+        if (previous === undefined) delete process.env.LLM_PROVIDER;
+        else process.env.LLM_PROVIDER = previous;
+    }
+});
+
+test('a divergence between the adapters would fail this file', async () => {
+    // A guard on the guard: if the two adapters sent different conversations,
+    // the parity tests above compare those bodies directly and would fail. This
+    // asserts the comparison has something to compare — that both adapters
+    // actually issued a request rather than one silently short-circuiting.
+    const { hosted, selfHosted } = providers(ENV);
+    const a = await capture(hosted, ok('[]'));
+    const b = await capture(selfHosted, ok('[]'));
+    assert.equal(a.sent.length, 1);
+    assert.equal(b.sent.length, 1);
+    assert.notEqual(a.sent[0].url, b.sent[0].url);
 });

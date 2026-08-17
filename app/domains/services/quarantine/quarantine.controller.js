@@ -17,6 +17,13 @@ const { record } = require('../../canonical/retention');
 const { ingestBatch } = require('../../canonical/ingest');
 const { RETENTION } = require('../../canonical/retention');
 
+//: Calendar days a record predating the review deadline is given before it
+//: counts as overdue. Generous relative to the ten working days a new record
+//: gets: these were quarantined under no deadline at all, and marking the whole
+//: legacy backlog overdue on the day this ships would produce a number nobody
+//: can act on and everybody learns to ignore.
+const LEGACY_GRACE_MS = 21 * 86_400_000;
+
 function fail(res, status, message, data = {}) {
     return res.status(status).json({ status: 'error', message, data });
 }
@@ -54,9 +61,17 @@ const list = async (req, res) => {
         const expiryDays = RETENTION.quarantine.days;
         const now = Date.now();
 
+        // Records quarantined before this field existed have `reviewBy: null`,
+        // and MongoDB's comparison operators only match values of the same BSON
+        // type — so `{ $lt: date }` never matches null and the entire existing
+        // backlog would have been permanently invisible to the overdue query.
+        // That backlog is precisely what the deadline was added to surface.
         const overdue = await Quarantine.countDocuments({
             resolvedAt: null,
-            reviewBy: { $lt: new Date(now) },
+            $or: [
+                { reviewBy: { $lt: new Date(now) } },
+                { reviewBy: null, createdAt: { $lt: new Date(now - LEGACY_GRACE_MS) } },
+            ],
         });
 
         return res.status(200).json({
@@ -87,7 +102,10 @@ const list = async (req, res) => {
                     resolved_by: item.resolvedBy,
                     review_by: item.reviewBy || null,
                     review_overdue: Boolean(
-                        !item.resolvedAt && item.reviewBy && now > new Date(item.reviewBy).getTime(),
+                        !item.resolvedAt &&
+                            (item.reviewBy
+                                ? now > new Date(item.reviewBy).getTime()
+                                : now - new Date(item.createdAt).getTime() > LEGACY_GRACE_MS),
                     ),
                     // Surfaced per item rather than left to be inferred from a
                     // policy constant, because what expires is a record of a

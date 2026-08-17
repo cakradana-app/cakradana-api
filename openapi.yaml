@@ -1805,6 +1805,13 @@ paths:
         the two records are two donors — so the queue is ordered by soonest
         deadline, not newest, and the open count is reported as what it is: the
         number of donors currently being counted twice.
+
+        Ingestion is open to any authenticated account, so one caller inventing
+        a new spelling per submission could otherwise set this queue's order.
+        Past a per-submitter cap, further reviews are still recorded — the pair
+        may be genuine — but are marked `set_aside` and excluded from the
+        headline overdue count, which is reported separately as
+        `set_aside_from_one_submitter`.
       parameters:
         - name: state
           in: query
@@ -1901,8 +1908,19 @@ paths:
         than deleted. An incorrect merge is precisely what a subject would
         contest, and there is nothing to un-merge if one side is gone.
 
-        A reason is required. The merge attributes one person's donations to
-        another and the basis has to be readable afterwards.
+        A reason is required, and the actor comes from the token rather than
+        the body: the merge record is what a subject contesting it is shown, so
+        it has to be the one thing in the request the caller could not choose.
+
+        Refused with 403 for an account without a reviewer role whether or not
+        `ENFORCE_ROLES` is on. Shadow-mode enforcement is a sound trade for a
+        read — the cost of being wrong is a log line — and this cannot be
+        undone.
+
+        Refused with 409 if either entity has already been merged into another
+        record: repointing into a tombstone buries the donations a level deeper,
+        and overwriting an existing merge pointer destroys the trail a subject
+        contesting the earlier merge has to follow.
       parameters:
         - name: id
           in: path
@@ -1944,8 +1962,15 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: |
+            Not a reviewer. Refused whether or not role enforcement is enabled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: Already decided
+          description: Already decided, or an entity was merged away since this was raised
           content:
             application/json:
               schema:
@@ -1958,9 +1983,14 @@ paths:
       summary: Record that the two names are different people
       description: |
         A reason is required in this direction too. Without one the outcome is
-        indistinguishable from an untouched review, and the pair is raised
-        again by the next donation under either name — which is how a queue
-        comes to hold the same five questions permanently.
+        indistinguishable from an untouched review.
+
+        The decision sticks: a pair recorded as separate is matched in either
+        direction on subsequent ingestion and its sighting count increments
+        rather than a fresh review being raised.
+
+        Refused with 403 for an account without a reviewer role whether or not
+        `ENFORCE_ROLES` is on.
       parameters:
         - name: id
           in: path
@@ -2035,6 +2065,11 @@ paths:
         judgement. An exception is marked as one, so it reads afterwards as a
         deliberate carve-out rather than an ordinary label that disagrees with
         its neighbours.
+
+        Refused with 403 for an account without a reviewer role whether or not
+        `ENFORCE_ROLES` is on: one call writes an analyst disposition onto every
+        member of the cluster, which is the training signal and the review
+        record at once.
       requestBody:
         required: true
         content:
@@ -2082,6 +2117,13 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: |
+            Not a reviewer. Refused whether or not role enforcement is enabled.
           content:
             application/json:
               schema:
