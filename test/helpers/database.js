@@ -31,12 +31,20 @@
 const { before, beforeEach, after } = require('node:test');
 const mongoose = require('mongoose');
 
-//: How long to wait for a supplied database before giving up. Short, because
+//: How long to wait for a database somebody else is running. Short, because
 //: the failure it produces is the useful one: a URI pointing at nothing should
-//: say so while somebody is still watching, not two minutes later. Starting an
-//: in-process server has no such limit — a cold binary download is slow and
-//: cancelling it would report a missing database that is merely still arriving.
-const SERVER_SELECTION_TIMEOUT_MS = 15_000;
+//: say so while somebody is still watching, not two minutes later.
+const SUPPLIED_TIMEOUT_MS = 15_000;
+
+//: How long to wait for one we started ourselves. Longer, and for a reason the
+//: shorter figure got wrong: the test runner runs each file in its own process,
+//: so a full run starts one server per file that needs one, all at once. On a
+//: machine where that contends for CPU the last of them can take well over
+//: fifteen seconds to accept a connection, and the run then fails a test in a
+//: file that is working — intermittently, which is worse than failing, because
+//: a suite that fails one test in twenty runs teaches people to run it again
+//: rather than to read it.
+const OWN_TIMEOUT_MS = 120_000;
 
 let server = null;
 
@@ -73,7 +81,7 @@ async function start() {
         // parallel processes and a shared name would let one file's cleanup
         // empty another file's fixtures mid-assertion.
         dbName: `cakradana-test-${process.pid}`,
-        serverSelectionTimeoutMS: SERVER_SELECTION_TIMEOUT_MS,
+        serverSelectionTimeoutMS: server ? OWN_TIMEOUT_MS : SUPPLIED_TIMEOUT_MS,
     });
 }
 
