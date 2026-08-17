@@ -352,6 +352,30 @@ test('a restore into a store that already holds data is refused', async () => {
     );
 });
 
+test('a forced merge is reported as a merge, not as a short restore', async () => {
+    const target = await newStore();
+    const out = newWorkspace();
+
+    const first = await newStore();
+    await seed(first);
+    const { archive: firstArchive } = await backup({ uri: first, out, log: quiet });
+    await restore({ from: firstArchive, uri: target, log: quiet });
+
+    // A different store's archive, so the documents do not collide and the
+    // merge actually happens.
+    const second = await newStore();
+    await seed(second);
+    const { archive: secondArchive } = await backup({ uri: second, out, log: quiet });
+
+    // The counts differ for a reason that has nothing to do with the archive
+    // being short, and calling it an incomplete restore would send somebody
+    // looking at the wrong thing.
+    await assert.rejects(
+        () => restore({ from: secondArchive, uri: target, force: true, log: quiet }),
+        /--force merged into collections that already held documents/,
+    );
+});
+
 test('a tampered archive is refused before anything reaches the database', async () => {
     const source = await newStore();
     const target = await newStore();

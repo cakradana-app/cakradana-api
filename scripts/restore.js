@@ -238,7 +238,16 @@ async function restore({
 
         if (mismatches.length > 0) {
             throw new RestoreIncomplete(
-                'the restore is incomplete and must not be treated as a recovery',
+                occupied.length > 0
+                    // Names what actually happened. `--force` merged into a
+                    // store that already held documents, so the counts differ
+                    // for a reason that has nothing to do with the archive
+                    // being short, and reporting it as an incomplete restore
+                    // would send somebody looking at the wrong thing.
+                    ? 'the store does not match the archive: --force merged into collections ' +
+                      'that already held documents, so what is here is neither the archive ' +
+                      'nor what was here before'
+                    : 'the restore is incomplete and must not be treated as a recovery',
                 mismatches,
             );
         }
