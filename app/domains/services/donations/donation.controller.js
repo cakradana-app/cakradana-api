@@ -301,46 +301,18 @@ const listAsReceiver = (req, res) => listAsParty(req, res, 'receiver');
  * a verified entity link where the account has one.
  */
 async function confirmAsParty(req, res, party) {
-    try {
-        const donationId = req.body?.donationId || req.body?.donation_id;
-        if (!donationId) return fail(res, 400, 'Donation ID is required');
-
-        const user = await User.findOne({ email: req.user.email });
-        if (!user) return fail(res, 400, 'User not found');
-
-        const donation = await Donation.findOne({
-            _id: donationId,
-            supersededBy: null,
-        }).lean();
-        if (!donation) {
-            return fail(res, 404, `Donation not found or you are not the ${party}`);
-        }
-
-        const ref = donation[`${party}Ref`] || {};
-        let entitled = ref.rawText === user.name;
-        if (!entitled && user.entityId && user.entityLinkVerifiedAt) {
-            const entity = await Entity.findById(user.entityId).lean();
-            const target = String(entity?.mergedInto || user.entityId);
-            entitled = String(ref.entityId || '') === target;
-        }
-        if (!entitled) {
-            // The same refusal for "no such donation" and "not yours", so the
-            // endpoint cannot be used to discover which donation ids exist.
-            return fail(res, 404, `Donation not found or you are not the ${party}`);
-        }
-
-        // Delegated rather than reimplemented. Two places writing confirmations
-        // would be two places that have to keep agreeing about what one means,
-        // and the schema constraint that keeps a confirmation off the risk axis
-        // lives on the other side of that boundary.
-        const labels = require('./labels.controller');
-        req.body = { donation_id: String(donation._id), note: req.body?.note };
-        return party === 'sender'
-            ? labels.confirmAsSender(req, res)
-            : labels.confirmAsReceiver(req, res);
-    } catch (err) {
-        return serverError(res, err, `Error confirming as ${party}`);
-    }
+    // Delegated entirely, entitlement check included. It used to be performed
+    // here and then handed on, which left the sibling route that reaches the
+    // same functions directly with no check at all — a stranger could attest to
+    // both sides of a donation and manufacture the corroboration signal.
+    // Duplicating the check in both places would have fixed the symptom and
+    // left two implementations of one rule to drift apart, so there is now one,
+    // and it sits with the write it guards.
+    const labels = require('./labels.controller');
+    req.body = { donation_id: req.body?.donationId ?? req.body?.donation_id, note: req.body?.note };
+    return party === 'sender'
+        ? labels.confirmAsSender(req, res)
+        : labels.confirmAsReceiver(req, res);
 }
 
 const confirmAsSender = (req, res) => confirmAsParty(req, res, 'sender');

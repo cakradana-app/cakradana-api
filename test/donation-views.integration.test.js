@@ -379,3 +379,84 @@ test('a list that fits says it is complete', async () => {
     assert.equal(sent.body.page.total, 1);
     assert.equal(sent.body.page.truncated, undefined);
 });
+
+test('a stranger cannot confirm a donation they are not party to', async () => {
+    // The route these functions are mounted on directly had no entitlement
+    // check at all, because the check lived in the sibling that delegates to
+    // them. A stranger could attest to both sides of one donation and produce
+    // exactly the corroboration signal recording the party was meant to make
+    // trustworthy.
+    const labels = require('../app/domains/services/donations/labels.controller');
+    await makeUser();
+    const mallory = await makeUser({ name: 'Mallory', email: 'mallory@evil.test' });
+    const donation = await makeDonation('Budi Santoso', 'Partai Maju');
+
+    for (const fn of [labels.confirmAsSender, labels.confirmAsReceiver]) {
+        const res = reply();
+        await fn(
+            { body: { donation_id: String(donation._id) }, user: { email: mallory.email } },
+            res,
+        );
+        assert.equal(res.sent.status, 404);
+    }
+    assert.equal(await Label.countDocuments({}), 0);
+});
+
+test('an operator where a donation id goes is refused', async () => {
+    // Express parses `{"donation_id": {"$ne": null}}` into an object and
+    // mongoose casts it as an operator, so `findById` returned whichever
+    // donation matched first — the confirmation bypass needed no id at all.
+    const labels = require('../app/domains/services/donations/labels.controller');
+    const mallory = await makeUser({ name: 'Mallory', email: 'mallory@evil.test' });
+    await makeDonation('Budi Santoso', 'Partai Maju');
+
+    for (const payload of [{ $ne: null }, { $gt: '' }, ['x'], 1]) {
+        const res = reply();
+        await labels.confirmAsSender(
+            { body: { donation_id: payload }, user: { email: mallory.email } },
+            res,
+        );
+        assert.equal(res.sent.status, 400, `an operator got through as ${JSON.stringify(payload)}`);
+    }
+    assert.equal(await Label.countDocuments({}), 0);
+});
+
+test('the named party can still confirm, through either route', async () => {
+    // The refusals above are only correct if the legitimate path still works.
+    const labels = require('../app/domains/services/donations/labels.controller');
+    const user = await makeUser();
+    const donation = await makeDonation('Budi Santoso', 'Partai Maju');
+
+    const direct = reply();
+    await labels.confirmAsSender(
+        { body: { donation_id: String(donation._id) }, user: { email: user.email } },
+        direct,
+    );
+    assert.equal(direct.sent.status, 200);
+    assert.equal(direct.sent.body.data.confirmed_as, 'sender');
+
+    const viaSubjectView = reply();
+    await controller.confirmAsSender(
+        { body: { donationId: String(donation._id) }, user: { email: user.email } },
+        viaSubjectView,
+    );
+    assert.equal(viaSubjectView.sent.status, 200);
+});
+
+test('a superseded donation cannot be confirmed', async () => {
+    // Confirming the version that was corrected attests to a figure the record
+    // no longer carries.
+    const labels = require('../app/domains/services/donations/labels.controller');
+    const user = await makeUser();
+    const superseding = await makeDonation('Budi Santoso', 'Partai Maju');
+    const corrected = await makeDonation('Budi Santoso', 'Partai Maju', {
+        supersededBy: superseding._id,
+    });
+
+    const res = reply();
+    await labels.confirmAsSender(
+        { body: { donation_id: String(corrected._id) }, user: { email: user.email } },
+        res,
+    );
+    assert.equal(res.sent.status, 404);
+});

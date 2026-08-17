@@ -18,7 +18,8 @@
 
 const mongoose = require('mongoose');
 
-const { Donation, Label, ScoringEvent } = require('../../canonical/canonical.model');
+const { Donation, Entity, Label, ScoringEvent } = require('../../canonical/canonical.model');
+const { User } = require('../../users/user.model');
 const { record } = require('../../canonical/retention');
 const { LABEL_VALUES } = require('../../vocabulary');
 const scoring = require('../../../utils/scoring/client');
@@ -43,6 +44,49 @@ function fail(res, status, message, data = {}) {
 }
 
 /**
+ * An identifier the caller supplied, or nothing.
+ *
+ * Express parses `{"donation_id": {"$ne": null}}` into an object, and mongoose
+ * casts it as an operator rather than refusing it — so `findById` handed that
+ * shape returns whichever document happens to match first. Every caller-supplied
+ * id is checked for being a string before it reaches a query.
+ */
+function identifierOf(value) {
+    return typeof value === 'string' && mongoose.Types.ObjectId.isValid(value)
+        ? value
+        : null;
+}
+
+/**
+ * Whether this account is the named party to this donation.
+ *
+ * Checked here rather than by the caller. These functions are mounted on two
+ * routes — `occurred-as-{sender,receiver}` reaches them directly, and
+ * `confirm-as-{sender,receiver}` reaches them through the subject views — and
+ * for as long as the check lived only in the second, the first wrote
+ * confirmations for anybody. A stranger could attest to both sides of a
+ * donation and produce exactly the corroboration signal that recording the
+ * party was meant to make trustworthy.
+ *
+ * A verified entity link is accepted as well as the name, and follows a merge:
+ * an account whose entity was absorbed is still party to its donations.
+ */
+async function isPartyTo(donation, email, party) {
+    const user = await User.findOne({ email }).lean();
+    if (!user) return false;
+
+    const ref = donation[`${party}Ref`] || {};
+    if (ref.rawText && ref.rawText === user.name) return true;
+
+    if (user.entityId && user.entityLinkVerifiedAt) {
+        const entity = await Entity.findById(user.entityId).lean();
+        const target = String(entity?.mergedInto || user.entityId);
+        if (String(ref.entityId || '') === target) return true;
+    }
+    return false;
+}
+
+/**
  * Record that a party confirms a donation occurred.
  *
  * Stored as indeterminate on risk, deliberately. The schema refuses any other
@@ -51,14 +95,23 @@ function fail(res, status, message, data = {}) {
  */
 async function recordOccurrence(req, res, party) {
     try {
-        const { donation_id: donationId, note } = req.body || {};
+        const { note } = req.body || {};
+        const donationId = identifierOf(req.body?.donation_id ?? req.body?.donationId);
         if (!donationId) {
-            return fail(res, 400, 'donation_id is required');
+            return fail(res, 400, 'donation_id is required, as an identifier');
         }
+        const actor = req.user?.email || null;
+        if (!actor) return fail(res, 400, 'a confirmation must name who made it');
 
-        const donation = await Donation.findById(donationId);
-        if (!donation) {
-            return fail(res, 404, 'No such donation');
+        const donation = await Donation.findOne({
+            _id: donationId,
+            supersededBy: null,
+        });
+        // The same answer for a donation that does not exist and one this
+        // account is not party to, so the endpoint cannot be used to discover
+        // which donation ids are held.
+        if (!donation || !(await isPartyTo(donation, actor, party))) {
+            return fail(res, 404, `No such donation, or you are not the ${party}`);
         }
 
         const label = await Label.create({
@@ -67,7 +120,7 @@ async function recordOccurrence(req, res, party) {
             value: 'indeterminate',
             source: 'recipient_confirmation',
             weight: SOURCE_WEIGHTS.recipient_confirmation,
-            actor: req.user?.email || null,
+            actor,
             confirmedParty: party,
             note: note || `confirmed as ${party}`,
         });
@@ -113,9 +166,10 @@ const confirmAsReceiver = (req, res) => recordOccurrence(req, res, 'receiver');
  */
 const disposition = async (req, res) => {
     try {
-        const { donation_id: donationId, value, typology, note } = req.body || {};
+        const { value, typology, note } = req.body || {};
 
-        if (!donationId) return fail(res, 400, 'donation_id is required');
+        const donationId = identifierOf(req.body?.donation_id);
+        if (!donationId) return fail(res, 400, 'donation_id is required, as an identifier');
         if (!LABEL_VALUES.includes(value)) {
             return fail(
                 res,
