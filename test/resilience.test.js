@@ -544,7 +544,25 @@ test('archives are not kept forever, and an unfinished one is not left to be res
     assert.ok(left.includes('something-else'));
     assert.ok(left.includes('20260101T000000Z.partial') === false);
     // The recent one and the run just taken.
-    assert.equal(left.filter((name) => /^\d{8}T\d{6}Z$/.test(name)).length, 2);
+    assert.equal(left.filter((name) => /^\d{8}T\d{6}Z(-\d+)?$/.test(name)).length, 2);
+});
+
+test('two backups in the same second do not land on the same archive', async () => {
+    // The stamp is second-precision because a person reads it. The second run
+    // used to do all its work and then fail at the rename, which a schedule
+    // every six hours never hits and somebody running one by hand during an
+    // incident does.
+    const uri = await newStore();
+    const out = newWorkspace();
+    await seed(uri);
+
+    const now = new Date();
+    const first = await backup({ uri, out, now, log: quiet });
+    const second = await backup({ uri, out, now, log: quiet });
+
+    assert.notEqual(first.archive, second.archive);
+    assert.equal(fs.readdirSync(out).length, 2);
+    assert.equal(second.manifest.documents, first.manifest.documents);
 });
 
 test('pruning removes nothing when pointed at a directory of things it did not write', () => {

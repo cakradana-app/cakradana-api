@@ -79,7 +79,7 @@ async function backup({
     }
 
     const startedAt = new Date();
-    const archive = path.join(out, archiveStamp(now));
+    const archive = freeArchivePath(out, archiveStamp(now));
     const partial = `${archive}.partial`;
 
     const connection = await mongoose.createConnection(uri).asPromise();
@@ -191,6 +191,23 @@ async function backup({
     } finally {
         await connection.close();
     }
+}
+
+/**
+ * An archive path nothing is using yet.
+ *
+ * The stamp is second-precision because a person reads it, and two runs within
+ * the same second would otherwise land on the same directory: the second one
+ * failed at the rename with ENOTEMPTY, after doing all its work. A scheduled
+ * backup never hits this, which is precisely why it would have been discovered
+ * by whoever ran a second one by hand during an incident.
+ */
+function freeArchivePath(out, stamp) {
+    let candidate = path.join(out, stamp);
+    for (let n = 2; fs.existsSync(candidate) || fs.existsSync(`${candidate}.partial`); n += 1) {
+        candidate = path.join(out, `${stamp}-${n}`);
+    }
+    return candidate;
 }
 
 /**
