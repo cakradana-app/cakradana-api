@@ -269,9 +269,14 @@ async function groupAlerts() {
     return get('/v1/alerts');
 }
 
+async function registerStatus() {
+    return get('/v1/registers');
+}
+
 module.exports = {
     modelHealth,
     groupAlerts,
+    registerStatus,
     scoreDonation,
     scoreMany,
     toPayload,

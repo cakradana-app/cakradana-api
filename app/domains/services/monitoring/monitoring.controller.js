@@ -95,4 +95,50 @@ const alerts = async (req, res) => {
     }
 };
 
-module.exports = { health, alerts };
+/**
+ * Which reference lists the rules are actually usable against.
+ *
+ * A register that quietly stopped being refreshed raises nothing. The rules
+ * that depend on it return indeterminate, the queue simply stops containing
+ * that kind of finding, and from the outside it looks exactly like a population
+ * in which nobody is a prohibited source. Nothing else in this system would
+ * show the difference.
+ *
+ * Reported as unavailable with a reason when the scoring service cannot be
+ * reached, never as an empty list of healthy registers.
+ */
+const registers = async (req, res) => {
+    try {
+        const report = await scoring.registerStatus();
+        return res.status(200).json({
+            status: 'success',
+            message: 'Register freshness',
+            data: { available: true, ...report },
+        });
+    } catch (err) {
+        if (err.name === 'ScoringUnavailable') {
+            return res.status(200).json({
+                status: 'success',
+                message: 'Register freshness is unavailable',
+                data: {
+                    available: false,
+                    reason: err.message,
+                    registers: [],
+                    // Said explicitly: an empty list here is the absence of an
+                    // answer, not a clean bill of health.
+                    note:
+                        'this is not a report that every register is healthy; it ' +
+                        'is the absence of a report',
+                },
+            });
+        }
+        console.error('Error reading register freshness:', err);
+        return res.status(500).json({
+            status: 'error',
+            message: process.env.DEBUG ? err.message : 'Internal Server Error',
+            data: {},
+        });
+    }
+};
+
+module.exports = { health, alerts, registers };

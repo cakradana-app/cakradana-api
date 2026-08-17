@@ -1091,6 +1091,39 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /service/monitoring/registers:
+    get:
+      tags:
+        - Operations
+      summary: Whether the reference lists the rules depend on are usable
+      description: |
+        A register that quietly stopped being refreshed raises nothing. The
+        rules that depend on it return indeterminate, the queue simply stops
+        containing that kind of finding, and from outside it looks exactly like
+        a population in which nobody is a prohibited source. Nothing else in
+        this system shows the difference.
+
+        "Never supplied" and "expired" are reported as the same kind of problem
+        because the rules treat them identically. Each unusable register names
+        which findings will not be raised while it stays that way.
+
+        When the scoring service cannot be reached this reports unavailable
+        with a reason, never an empty list of healthy registers — an empty list
+        here is the absence of an answer, not a clean bill of health.
+      responses:
+        '200':
+          description: Register freshness, or that it could not be established
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /service/monitoring/model-health:
     get:
       tags:
