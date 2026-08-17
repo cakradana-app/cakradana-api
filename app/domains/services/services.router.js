@@ -15,6 +15,7 @@ const disputeRouter = require('./disputes/dispute.router');
 const notificationRouter = require('./notifications/notification.router');
 const quarantineRouter = require('./quarantine/quarantine.router');
 const caseRouter = require('./cases/case.router');
+const jobRouter = require('./jobs/job.router');
 
 serviceRouter.use('/digital-form', digitalFormRouter);
 serviceRouter.use('/paper-form', paperFormRouter);
@@ -24,5 +25,6 @@ serviceRouter.use('/disputes', disputeRouter);
 serviceRouter.use('/notifications', notificationRouter);
 serviceRouter.use('/quarantine', quarantineRouter);
 serviceRouter.use('/cases', caseRouter);
+serviceRouter.use('/jobs', jobRouter);
 
 module.exports = serviceRouter;

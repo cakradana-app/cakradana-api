@@ -270,8 +270,17 @@ paths:
         - Paper Form Services
       summary: Process Paper Form Documents via OCR
       description: |
-        Upload images of paper forms to extract donation data using OCR technology.
-        Supports multiple languages and automatically extracts donation information using AI.
+        Upload images of paper forms to extract donation data using OCR.
+
+        Asynchronous: the response is a job handle, not the extraction result. A
+        ten-page scan is ten OCR passes and ten model calls, and holding the
+        connection open for that ties the upload's success to a proxy's idle
+        timeout — the work completes, the connection is already gone, and the
+        uploader is told it failed. They upload again, and deduplication is the
+        only thing standing between that and doubled records.
+
+        A 202 means accepted. Nothing has been ingested at the point it is
+        returned; poll the job for progress and the outcome.
       parameters:
         - in: query
           name: lang
@@ -296,28 +305,14 @@ paths:
               required:
                 - images
       responses:
-        '200':
-          description: Paper forms processed successfully
+        '202':
+          description: |
+            Accepted for processing. Carries the job id and the URL to poll;
+            nothing has been ingested yet.
           content:
             application/json:
               schema:
-                allOf:
-                  - $ref: '#/components/schemas/SuccessResponse'
-                  - type: object
-                    properties:
-                      results:
-                        type: object
-                        properties:
-                          ocr:
-                            type: array
-                            items:
-                              $ref: '#/components/schemas/OCRResult'
-                          donations:
-                            type: array
-                            items:
-                              $ref: '#/components/schemas/ExtractedDonation'
-                      summary:
-                        $ref: '#/components/schemas/OCRSummary'
+                $ref: '#/components/schemas/SuccessResponse'
         '400':
           description: No images uploaded or user not registered
           content:
@@ -1005,6 +1000,92 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: No such donation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/jobs:
+    get:
+      tags:
+        - Jobs
+      summary: List background jobs
+      parameters:
+        - name: kind
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [queued, running, succeeded, partially_succeeded, failed]
+        - name: mine
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 25
+            maximum: 100
+      responses:
+        '200':
+          description: Jobs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/jobs/{jobId}:
+    get:
+      tags:
+        - Jobs
+      summary: Progress and outcome of one job
+      description: |
+        Progress is reported as work is done, not only on completion. A job that
+        reports nothing until it finishes is indistinguishable from one that has
+        hung.
+
+        `partially_succeeded` is a real state: a batch where two of ten pages
+        were unreadable succeeded at eight and failed at two, and both halves
+        are reported.
+
+        A job interrupted by a restart is marked failed rather than left
+        claiming to be running. The first invites re-uploading; the second
+        invites waiting indefinitely.
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Job status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such job
           content:
             application/json:
               schema:
@@ -2583,6 +2664,9 @@ tags:
     description: Web scraping and AI-powered donation data extraction
   - name: Donation Management
     description: Donation and entity data retrieval and management
+  - name: Jobs
+    description: |
+      Work that outlives the request that started it, and its progress.
   - name: Operations
     description: |
       Liveness, readiness, and metrics. Unauthenticated: a probe that needs a
