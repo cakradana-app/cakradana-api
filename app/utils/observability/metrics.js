@@ -13,6 +13,8 @@
  * describe the store rather than this process's view of it.
  */
 
+const mongoose = require('mongoose');
+
 const counters = new Map();
 const histograms = new Map();
 
@@ -37,14 +39,60 @@ function observe(name, value, labels = {}) {
     histograms.set(id, current);
 }
 
+//: How long the store figures get before the scrape gives up on them. A
+//: metrics endpoint that hangs is a metrics endpoint that is down, as far as
+//: anything scraping it on a timeout is concerned — so waiting longer than a
+//: scrape will wait produces the outcome the tolerance below exists to prevent.
+//:
+//: The previous behaviour was tolerant but not timely: an unreachable database
+//: was caught, after mongoose spent ten seconds holding the commands in its
+//: buffer first. Ten seconds is at or past a default scrape timeout, so the
+//: visibility disappeared exactly when the store was down.
+const STORE_GAUGE_BUDGET_MS = 2_000;
+
 /**
  * Figures that describe the store rather than this process.
  *
  * Read on scrape and tolerant of the database being unreachable: a metrics
  * endpoint that fails when the database is down removes the visibility exactly
- * when it is needed.
+ * when it is needed. Tolerant means both that it does not throw and that it
+ * does not wait — see the budget above.
  */
 async function storeGauges() {
+    // No connection at all is answerable without waiting for one. Mongoose
+    // buffers commands issued while disconnected and resolves them if a
+    // connection arrives, which is right for application code and wrong here:
+    // a scrape wants the current answer, and the current answer is that the
+    // store cannot be read.
+    if (mongoose.connection.readyState !== 1) {
+        return { cakradana_store_metrics_available: 0 };
+    }
+
+    let timer;
+    try {
+        return await Promise.race([
+            collectStoreGauges(),
+            new Promise((_, reject) => {
+                timer = setTimeout(
+                    () => reject(new Error('store gauges exceeded their budget')),
+                    STORE_GAUGE_BUDGET_MS,
+                );
+                // The process must not be held open by a scrape's timer.
+                if (timer.unref) timer.unref();
+            }),
+        ]);
+    } catch (error) {
+        // Nothing is fabricated here. A gauge omitted is a gauge nobody
+        // measured, and emitting zeroes would say the store holds nothing —
+        // which is the one reading that must never be produced by a failure to
+        // read it.
+        return { cakradana_store_metrics_available: 0 };
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+async function collectStoreGauges() {
     const gauges = {};
     try {
         const {

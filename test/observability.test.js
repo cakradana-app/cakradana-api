@@ -132,3 +132,34 @@ test('every rendered metric carries its help text once', async () => {
     const helps = rendered.split('\n').filter((l) => l.startsWith('# HELP cakradana_requests_total'));
     assert.equal(helps.length, 1);
 });
+
+test('a scrape gives up on the store rather than hanging on it', async () => {
+    // Tolerating an unreachable database is not the same as tolerating it in
+    // time. The gauges were caught after mongoose held the commands in its
+    // buffer for ten seconds, which is at or past a default scrape timeout — so
+    // the visibility disappeared exactly when the store was down, which is the
+    // outcome the tolerance exists to prevent.
+    const started = Date.now();
+    const rendered = await metrics.render();
+    const took = Date.now() - started;
+
+    assert.ok(
+        took < 5_000,
+        `a scrape with no database took ${took}ms, which is at or past a scrape timeout`,
+    );
+
+    // Reported as unavailable rather than as zero. A gauge omitted is a gauge
+    // nobody measured; emitting zeroes would say the store holds nothing, which
+    // is the one reading a failure to read must never produce.
+    assert.match(rendered, /^cakradana_store_metrics_available 0$/m);
+    assert.equal(rendered.includes('cakradana_donations_total'), false);
+    assert.equal(rendered.includes('cakradana_quarantine_total'), false);
+
+    // The figures that describe this process do not depend on the store and
+    // are still there, which is most of what a scrape is for when the database
+    // is the thing that is broken.
+    assert.match(rendered, /^cakradana_requests_total\{/m);
+    // And the declared objectives, which are constants and never needed the
+    // store at all.
+    assert.match(rendered, /^cakradana_rpo_objective_seconds /m);
+});
