@@ -153,7 +153,7 @@ const mint = async (req, res) => {
         // another decrypt cleanly and the wrong number is returned under the
         // wrong entity's disclosure record.
         const valueRef = newSurrogate();
-        const sealed = encrypt(value, { valueRef, entityId: entity._id, scheme });
+        const sealed = encrypt(value, { valueRef, scheme });
         let stored;
         try {
             stored = await EntityIdentifier.create({
@@ -309,7 +309,41 @@ const reveal = async (req, res) => {
             return fail(res, 404, 'No such identifier');
         }
 
-        const value = decrypt(stored);
+        // Decryption is attempted inside its own guard, and the attempt is
+        // recorded either way. It used to sit before the only `record` call on
+        // this path, so a read that failed to decrypt left no trace at all —
+        // and the module header says every read is recorded with who made it
+        // and why. A read that could not be completed is still a read somebody
+        // asked for, and is the more interesting of the two.
+        let value;
+        try {
+            value = decrypt(stored);
+        } catch (error) {
+            await record({
+                actor,
+                action: 'read-identifier',
+                subjectType: 'Entity',
+                subjectId: String(stored.entityId),
+                outcome: 'denied',
+                reason: `${reason} — the stored value could not be authenticated`,
+            });
+            return res.status(500).json({
+                status: 'error',
+                message:
+                    'This identifier is stored but could not be read back. The record ' +
+                    'is intact and the value is not recoverable from it.',
+                data: {
+                    value_ref: stored.valueRef,
+                    scheme: stored.scheme,
+                    // Said outright, because the surrounding views will go on
+                    // reporting this party as identified: the lookup hash does
+                    // not depend on anything that could have broken here.
+                    warning:
+                        'other views still report this entity as identified; that ' +
+                        'claim now rests on a value nobody can read',
+                },
+            });
+        }
 
         await record({
             actor,

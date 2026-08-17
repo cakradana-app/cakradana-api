@@ -185,11 +185,25 @@ function lookupHash(scheme, value) {
  * GCM authenticates the ciphertext and not the document it sits in, so without
  * this, `iv`, `ciphertext` and `tag` copied from one record onto another
  * decrypt cleanly: reading Bob's surrogate returns Alice's number, and the
- * disclosure is recorded against Bob. Binding the surrogate, the entity, and
- * the scheme makes that substitution fail closed.
+ * disclosure is recorded against Bob. Binding the surrogate makes that
+ * substitution fail closed, because the surrogate is unique per record and a
+ * copy therefore lands under a different one.
+ *
+ * The entity is deliberately NOT bound, though it was at first. Binding it made
+ * the ciphertext unreadable the moment the record moved between entities — and
+ * a merge moves it, which is a routine supported operation on exactly the
+ * near-duplicate names this data produces. The key stayed intact and the
+ * plaintext became unrecoverable, in the collection whose entire purpose is the
+ * values that make an attribution certain. It also failed silently in the worst
+ * way: `lookupHash` does not involve the entity, so `/match` and
+ * `/entity/:id` went on reporting the party as identified.
+ *
+ * Binding an attribute that legitimately changes turns every legitimate change
+ * into data loss. The surrogate never changes, which is what makes it the right
+ * thing to bind.
  */
-function context({ valueRef, entityId, scheme }) {
-    return Buffer.from(`${valueRef}|${entityId}|${scheme}`, 'utf8');
+function context({ valueRef, scheme }) {
+    return Buffer.from(`${valueRef}|${scheme}`, 'utf8');
 }
 
 function encrypt(value, binding) {

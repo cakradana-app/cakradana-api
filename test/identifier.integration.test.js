@@ -584,3 +584,83 @@ test('the identifier views do not wait for the enforcement flag', async () => {
     );
     assert.ok(router);
 });
+
+test('a merge does not destroy the identifiers it moves', async () =>
+    withSecrets(async () => {
+        // The ciphertext was bound to the entity, and a merge moves the record
+        // between entities — so a routine merge made every identifier the
+        // absorbed party held permanently unreadable. The key stayed intact and
+        // the plaintext did not, in the collection whose whole purpose is the
+        // values that make an attribution certain.
+        //
+        // It failed silently in the worst direction too: the lookup hash does
+        // not involve the entity, so the surrounding views went on reporting
+        // the party as identified while the value behind that claim was gone.
+        const absorbed = await makeEntity('Budi Santosa');
+        const survivor = await makeEntity('Budi Santoso');
+        const minted = await mint({
+            entity_id: String(absorbed._id),
+            scheme: 'nik',
+            value: NIK,
+        });
+        assert.equal(minted.status, 201);
+
+        // Exactly what the merge does.
+        await EntityIdentifier.updateMany(
+            { entityId: absorbed._id },
+            { $set: { entityId: survivor._id } },
+        );
+
+        const res = reply();
+        await controller.reveal(
+            {
+                params: { ref: minted.body.data.value_ref },
+                body: { reason: 'reading it after the two records were joined' },
+                user: { email: ACTOR },
+            },
+            res,
+        );
+        assert.equal(res.sent.status, 200, 'a merge made the identifier unreadable');
+        assert.equal(res.sent.body.data.value, NIK);
+        assert.equal(String(res.sent.body.data.entity_id), String(survivor._id));
+    }));
+
+test('a read that cannot be completed is still recorded', async () =>
+    withSecrets(async () => {
+        // The audit entry was written after decryption, so a read that failed
+        // left no trace — against a module header that says every read is
+        // recorded with who made it and why. A read that could not be completed
+        // is still a read somebody asked for, and is the more interesting one.
+        const entity = await makeEntity();
+        const minted = await mint({
+            entity_id: String(entity._id),
+            scheme: 'nik',
+            value: NIK,
+        });
+        await EntityIdentifier.updateOne(
+            { valueRef: minted.body.data.value_ref },
+            { $set: { ciphertext: 'deadbeef' } },
+        );
+
+        const res = reply();
+        await controller.reveal(
+            {
+                params: { ref: minted.body.data.value_ref },
+                body: { reason: 'checking a record that will not authenticate' },
+                user: { email: ACTOR },
+            },
+            res,
+        );
+
+        assert.equal(res.sent.status, 500);
+        assert.equal(JSON.stringify(res.sent.body).includes(NIK), false);
+        // And it says the surrounding views are now making a claim they cannot
+        // support, which is the part an operator has to act on.
+        assert.match(res.sent.body.data.warning, /still report this entity as identified/);
+
+        const attempt = await AuditEntry.findOne({ action: 'read-identifier' }).lean();
+        assert.ok(attempt, 'a failed read wrote no audit entry at all');
+        assert.equal(attempt.outcome, 'denied');
+        assert.equal(attempt.actor, ACTOR);
+        assert.match(attempt.reason, /could not be authenticated/);
+    }));
