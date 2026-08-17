@@ -86,6 +86,24 @@ async function start() {
 }
 
 /**
+ * Wait for every model's indexes to exist.
+ *
+ * `mongoose.connect` resolves before `autoIndex` has finished, so a test that
+ * runs immediately afterwards races the index it depends on. That is not
+ * hypothetical: the test asserting two accounts cannot share a name — the one
+ * establishing the premise the whole name-scoping design rests on — was
+ * observed passing its insert and failing its assertion, because `name_1` did
+ * not exist yet.
+ *
+ * It fails loudly rather than passing falsely, so it is not a false green. It
+ * is still the kind of flake that teaches people to re-run rather than read,
+ * which is how a real failure gets ignored later.
+ */
+async function buildIndexes() {
+    await Promise.all(Object.values(mongoose.models).map((model) => model.init()));
+}
+
+/**
  * Empty every collection.
  *
  * Deleting documents rather than dropping collections, so the indexes mongoose
@@ -117,6 +135,7 @@ async function stop() {
 function useDatabase() {
     before(async () => {
         await start();
+        await buildIndexes();
     });
     beforeEach(async () => {
         await clear();

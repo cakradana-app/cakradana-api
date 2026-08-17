@@ -25,6 +25,7 @@ const { Donation, Entity, Label } = require('../../canonical/canonical.model');
 const User = require('../../users/user.model').User;
 const { record } = require('../../canonical/retention');
 const { log } = require('../../../utils/observability/logging');
+const { survivorOf } = require('../../canonical/resolution');
 
 //: A page of records. The subject views were previously unbounded because the
 //: whole store was one document and there was nothing to page; a name matching
@@ -42,18 +43,31 @@ const PAGE = 200;
  * can carry.
  */
 function completeness(total, shown) {
+    // `shown < PAGE` as well as `shown >= total`, because the two figures come
+    // from separate queries and nothing holds the collection still between
+    // them. A donation inserted after the count and before the read made
+    // `shown` equal to the cap and `total` one less, so a subject was told the
+    // list was complete while records of theirs were not in it — the reader and
+    // the failure this function's own note names. A page that filled to the cap
+    // is never complete, whatever the count says: the count is the stale half.
+    const filledThePage = shown >= PAGE;
+    const complete = shown >= total && !filledThePage;
     return {
         total,
         shown,
-        complete: shown >= total,
-        ...(shown < total
+        complete,
+        ...(!complete
             ? {
                   // Named rather than left to be inferred from the two numbers,
                   // and given the remedy, since a subject who cannot see all of
                   // their records needs to know what to do about it.
-                  truncated:
-                      `showing the ${shown} most recent of ${total}; narrow the ` +
-                      'range or ask an operator for the full set',
+                  truncated: filledThePage
+                      ? `showing ${shown}, which is the page limit; there may be ` +
+                        'more than the ' +
+                        `${total} counted. Narrow the range or ask an operator ` +
+                        'for the full set'
+                      : `showing the ${shown} most recent of ${total}; narrow the ` +
+                        'range or ask an operator for the full set',
               }
             : {}),
     };
@@ -287,11 +301,23 @@ async function listAsParty(req, res, party) {
         if (scope.kind === 'entity') {
             // A verified link is an identity, so the query is on the resolved
             // entity and a record filed under any spelling of the name is
-            // found. The surviving entity of a merge is followed: donations
-            // repointed by a merge belong to whoever now holds them.
-            const entity = await Entity.findById(scope.entityId).lean();
-            const target = entity?.mergedInto || scope.entityId;
-            filter = { [`${ref}.entityId`]: target };
+            // found. Merges are followed to the end of the chain rather than by
+            // one hop: a second merge of an already-absorbed entity left an
+            // account resolving to the middle, matching nothing, and being
+            // shown an empty list reported as complete.
+            const survivor = await survivorOf(scope.entityId);
+            if (!survivor.entityId) {
+                // Refused rather than answered with nothing. An account whose
+                // link cannot be resolved has not been shown that it has no
+                // donations; it has been shown that the system could not look.
+                return fail(
+                    res,
+                    409,
+                    `this account is linked to an entity that cannot be resolved: ${survivor.reason}`,
+                    { remedy: 'ask an operator to re-link this account' },
+                );
+            }
+            filter = { [`${ref}.entityId`]: survivor.entityId };
         } else {
             // A name match is not an identity, and this is the weaker claim.
             // Matching the raw text keeps it honest: the account is shown the

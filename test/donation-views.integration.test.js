@@ -392,7 +392,7 @@ test('a capped list says it was capped', async () =>
         assert.equal(sent.body.page.total, 205);
         assert.equal(sent.body.page.shown, 200);
         assert.equal(sent.body.page.complete, false);
-        assert.match(sent.body.page.truncated, /200 most recent of 205/);
+        assert.match(sent.body.page.truncated, /which is the page limit/);
     }));
 
 test('a list that fits says it is complete', async () =>
@@ -554,4 +554,127 @@ test('a verified party can confirm with the fallback off', async () => {
         res,
     );
     assert.equal(res.sent.status, 200);
+});
+
+test('a page that filled to the cap is never reported complete', async () =>
+    withNameScope(async () => {
+        // `total` and `shown` come from separate queries and nothing holds the
+        // collection still between them, so a donation inserted after the count
+        // and before the read made `shown` equal the cap and `total` one less —
+        // and the subject was told the list was complete while records of
+        // theirs were missing from it. A full page is never complete, whatever
+        // the count says: the count is the stale half.
+        const user = await makeUser();
+        const rows = Array.from({ length: 200 }, (_, index) => ({
+            senderRef: { entityId: null, rawText: 'Budi Santoso' },
+            receiverRef: { entityId: null, rawText: 'Partai Maju' },
+            amountIdr: 1_000_000 + index,
+            occurredAt: new Date('2026-06-05T00:00:00Z'),
+            recordedAt: new Date('2026-06-05T00:00:00Z'),
+            channel: 'digital-form',
+            dedupKey: `exact-${index}`,
+        }));
+        await Donation.insertMany(rows);
+
+        const sent = await asParty(user, 'sender');
+        assert.equal(sent.body.data.length, 200);
+        assert.equal(sent.body.page.total, 200);
+        assert.equal(
+            sent.body.page.complete,
+            false,
+            'a page filled exactly to the cap was reported complete',
+        );
+        assert.match(sent.body.page.truncated, /page limit/);
+    }));
+
+test('the confirmation path refuses a shared name, as the read path does', async () =>
+    withNameScope(async () => {
+        // The write path checked the name and the flag and nothing else, so it
+        // was strictly more permissive than the read path: a squatter on a
+        // deployment whose name index was never built could not see a donation
+        // but could attest to it, and that attestation reaches training at
+        // weight 0.7 and is shown to a reviewer as an account of the
+        // transaction.
+        const labels = require('../app/domains/services/donations/labels.controller');
+        await User.collection.dropIndex('name_1');
+        try {
+            await User.collection.insertMany([
+                { name: 'Budi Santoso', email: 'real@example.test', type: 'individual' },
+                { name: 'Budi Santoso', email: 'squatter@evil.test', type: 'individual' },
+            ]);
+            const donation = await makeDonation('Budi Santoso', 'Partai Maju');
+
+            const read = reply();
+            await controller.listAsSender(
+                { user: { email: 'squatter@evil.test' }, query: {}, body: {} },
+                read,
+            );
+            assert.equal(read.sent.status, 409);
+
+            const write = reply();
+            await labels.confirmAsSender(
+                {
+                    body: { donation_id: String(donation._id) },
+                    user: { email: 'squatter@evil.test' },
+                },
+                write,
+            );
+            assert.equal(
+                write.sent.status,
+                404,
+                'the write path admitted a confirmation the read path refused',
+            );
+            assert.equal(await Label.countDocuments({}), 0);
+        } finally {
+            await User.collection.deleteMany({});
+            await User.collection.createIndex({ name: 1 }, { unique: true });
+        }
+    }));
+
+test('a chain of merges is followed to the end, both reading and confirming', async () => {
+    // One hop left an account linked to the first link resolving to the middle
+    // of the chain, matching nothing — and the subject was then shown an empty
+    // list under this system's strongest scope claim, reported as complete,
+    // with nothing saying resolution had run out of hops.
+    const labels = require('../app/domains/services/donations/labels.controller');
+    const last = await makeEntity('Budi Santoso C');
+    const middle = await makeEntity('Budi Santoso B', { mergedInto: last._id });
+    const first = await makeEntity('Budi Santoso A', { mergedInto: middle._id });
+    const user = await makeUser({
+        entityId: first._id,
+        entityLinkVerifiedAt: new Date(),
+    });
+    const donation = await makeDonation('Budi Santoso', 'Partai Maju', {
+        senderId: last._id,
+    });
+
+    const sent = await asParty(user, 'sender');
+    assert.equal(sent.status, 200);
+    assert.equal(sent.body.data.length, 1, 'the chain was followed only one hop');
+    assert.equal(sent.body.scope, 'verified entity link');
+
+    const res = reply();
+    await labels.confirmAsSender(
+        { body: { donation_id: String(donation._id) }, user: { email: user.email } },
+        res,
+    );
+    assert.equal(res.sent.status, 200);
+});
+
+test('a link that cannot be resolved is refused, not answered with nothing', async () => {
+    // An account whose link resolves nowhere has not been shown that it has no
+    // donations; it has been shown that the system could not look. Reporting
+    // that as a complete, empty list is the failure this codebase treats as
+    // worst: something unmeasured reading as fine.
+    const orphan = await makeEntity('Budi Santoso');
+    const user = await makeUser({
+        entityId: orphan._id,
+        entityLinkVerifiedAt: new Date(),
+    });
+    await Entity.deleteOne({ _id: orphan._id });
+
+    const sent = await asParty(user, 'sender');
+    assert.equal(sent.status, 409);
+    assert.match(sent.body.message, /cannot be resolved/);
+    assert.match(sent.body.data.remedy, /re-link/);
 });

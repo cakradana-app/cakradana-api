@@ -230,7 +230,42 @@ function escapeRegex(value) {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/**
+ * The entity a record now belongs to, following merges to the end.
+ *
+ * One hop was not enough. A second merge of an already-absorbed entity — which
+ * `merge` permits, since it only refuses when the entity being merged is itself
+ * a tombstone — leaves a chain, and an account linked to the first link
+ * resolved to the middle of it and matched nothing. The subject was then shown
+ * an empty list under this system's strongest scope claim, reported as
+ * complete, with nothing saying resolution had run out of hops.
+ *
+ * The guard is on a cycle rather than on a depth. A cycle should not be
+ * constructible, and if one ever is, looping forever is a worse answer than
+ * stopping and saying where.
+ */
+async function survivorOf(entityId, { Entity: model = null } = {}) {
+    const collection = model || require('./canonical.model').Entity;
+    const seen = new Set();
+    let current = entityId ? String(entityId) : null;
+
+    while (current) {
+        if (seen.has(current)) {
+            // Reported rather than silently truncated: an unresolvable link is
+            // not the same as an account with no donations.
+            return { entityId: null, reason: 'the merge chain loops' };
+        }
+        seen.add(current);
+        const entity = await collection.findById(current).select('mergedInto').lean();
+        if (!entity) return { entityId: null, reason: 'the linked entity no longer exists' };
+        if (!entity.mergedInto) return { entityId: current, reason: null };
+        current = String(entity.mergedInto);
+    }
+    return { entityId: null, reason: 'no entity is linked to this account' };
+}
+
 module.exports = {
+    survivorOf,
     resolveEntity,
     normaliseName,
     similarity,

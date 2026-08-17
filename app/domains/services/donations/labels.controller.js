@@ -20,6 +20,8 @@ const mongoose = require('mongoose');
 
 const { Donation, Entity, Label, ScoringEvent } = require('../../canonical/canonical.model');
 const { User } = require('../../users/user.model');
+const { survivorOf } = require('../../canonical/resolution');
+const { log } = require('../../../utils/observability/logging');
 const { record } = require('../../canonical/retention');
 const { LABEL_VALUES } = require('../../vocabulary');
 const scoring = require('../../../utils/scoring/client');
@@ -81,9 +83,13 @@ async function isPartyTo(donation, email, party) {
     // follows a merge: an account whose entity was absorbed is still party to
     // the donations that moved with it.
     if (user.entityId && user.entityLinkVerifiedAt) {
-        const entity = await Entity.findById(user.entityId).lean();
-        const target = String(entity?.mergedInto || user.entityId);
-        if (String(ref.entityId || '') === target) return true;
+        // To the end of the chain, not one hop. A second merge of an
+        // already-absorbed entity left this resolving to the middle of it, so a
+        // subject with a verified link was refused on their own donation.
+        const survivor = await survivorOf(user.entityId);
+        if (survivor.entityId && String(ref.entityId || '') === survivor.entityId) {
+            return true;
+        }
     }
 
     // A name is not. It is chosen at registration, verified by nobody, and made
@@ -101,6 +107,22 @@ async function isPartyTo(donation, email, party) {
         ref.rawText === user.name &&
         process.env.ALLOW_NAME_SCOPED_SUBJECT_VIEWS === 'true'
     ) {
+        // The same collision check the read path applies, which this path did
+        // not. `subjectScope` refuses a name-scoped read when more than one
+        // account holds the name; without the same test here the write path was
+        // strictly more permissive than the read path, so a squatter on a
+        // deployment whose name index was never built could not see a donation
+        // but could attest to it — and that attestation reaches training at
+        // weight 0.7 and is shown to a reviewer as an account of the
+        // transaction.
+        const sharing = await User.countDocuments({ name: user.name });
+        if (sharing > 1) {
+            log.warn('refusing a name-scoped confirmation', {
+                reason: 'more than one account shares this name',
+                accounts: sharing,
+            });
+            return false;
+        }
         return true;
     }
     return false;
