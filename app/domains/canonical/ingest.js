@@ -20,6 +20,11 @@ const crypto = require('node:crypto');
 
 const { Donation, Entity, Label, Quarantine } = require('./canonical.model');
 const { resolveEntity } = require('./resolution');
+// Required lazily inside the call rather than at module load: the review
+// controller reads the canonical models, and requiring it here closes a cycle
+// through this module.
+const raiseResolutionReview = (args) =>
+    require('../services/entities/resolution-review.controller').raise(args);
 const { Service } = require('../services/services.model');
 const { CHANNELS, TEMPORAL_PRECISIONS } = require('../vocabulary');
 
@@ -191,6 +196,23 @@ async function ingestOne(candidate, options = {}) {
     if (mirrored?.legacyId) {
         await Donation.updateOne({ _id: donation._id }, { legacyDonationId: mirrored.legacyId });
     }
+
+    // A near match that reaches nobody is a near match that never gets
+    // decided, and until it is, the cumulative rules count one donor as two.
+    // Raising is deliberately unable to fail the ingestion: the donation is
+    // worth more than the queue entry, and the pair recurs on the next record.
+    await Promise.all([
+        raiseResolutionReview({
+            resolution: sender,
+            donationId: donation._id,
+            observedName: candidate.senderName,
+        }),
+        raiseResolutionReview({
+            resolution: receiver,
+            donationId: donation._id,
+            observedName: candidate.receiverName,
+        }),
+    ]);
 
     return {
         status: 'ingested',

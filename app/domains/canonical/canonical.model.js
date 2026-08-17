@@ -148,6 +148,15 @@ const entitySchema = new mongoose.Schema(
         registers: { type: [String], default: [] },
         firstSeen: { type: Date, default: null },
         lastSeen: { type: Date, default: null },
+        // Set on the entity that was merged away, pointing at the survivor.
+        // The record is kept rather than deleted: an incorrect merge is
+        // precisely what a subject would contest, and there is nothing to
+        // un-merge if one side has been removed.
+        mergedInto: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Entity',
+            default: null,
+        },
         // Every merge records its basis, confidence, and actor, and is
         // reversible. An incorrect merge attributes one person's donations to
         // another, which the affected subject must be able to contest.

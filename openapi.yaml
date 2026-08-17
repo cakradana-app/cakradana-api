@@ -1752,6 +1752,225 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /service/entities/review:
+    get:
+      tags:
+        - Entity Resolution
+      summary: Near matches waiting for a person to decide
+      description: |
+        Entity resolution sets the accuracy ceiling of every cumulative rule.
+        A donor whose name appears three ways is three donors, each under the
+        limit, and the rule that exists to catch exactly that reports nothing.
+
+        Ingestion refuses to merge a near match unattended and creates a
+        separate entity so the donation is not lost. Until somebody decides,
+        the two records are two donors — so the queue is ordered by soonest
+        deadline, not newest, and the open count is reported as what it is: the
+        number of donors currently being counted twice.
+      parameters:
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [open, merged, kept-separate]
+            default: open
+        - name: overdue
+          in: query
+          required: false
+          description: Only reviews past their deadline
+          schema:
+            type: string
+            enum: ['true']
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+      responses:
+        '200':
+          description: Reviews, soonest deadline first
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/entities/review/{id}:
+    get:
+      tags:
+        - Entity Resolution
+      summary: What a person needs to decide one review
+      description: |
+        Both entities' donation histories are summarised, because the question
+        is whether these are one donor and the strongest evidence is usually
+        the pattern: the same recipient, adjacent dates, amounts that only make
+        sense together.
+
+        Each donation carries the raw text the source document actually held.
+        The canonical name is this system's reading of that text and would beg
+        the question being asked.
+
+        The effect of each decision is stated, so a reviewer knows what they
+        are deciding rather than only which button they are pressing.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The review, with both histories
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such review
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/entities/review/{id}/merge:
+    post:
+      tags:
+        - Entity Resolution
+      summary: Record that the two names are one donor
+      description: |
+        Donations move to the surviving entity — the one that already existed,
+        so that merging does not change which record other systems hold a
+        reference to — and every derived figure either entity took part in is
+        marked for re-scoring. A merge that repointed donations without marking
+        the totals stale would leave findings computed against the split
+        identity standing.
+
+        The merged entity is retained with a pointer to the survivor rather
+        than deleted. An incorrect merge is precisely what a subject would
+        contest, and there is nothing to un-merge if one side is gone.
+
+        A reason is required. The merge attributes one person's donations to
+        another and the basis has to be readable afterwards.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Merged, with what it cost downstream
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Missing reason, or no person identified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such review
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Already decided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/entities/review/{id}/keep-separate:
+    post:
+      tags:
+        - Entity Resolution
+      summary: Record that the two names are different people
+      description: |
+        A reason is required in this direction too. Without one the outcome is
+        indistinguishable from an untouched review, and the pair is raised
+        again by the next donation under either name — which is how a queue
+        comes to hold the same five questions permanently.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Kept separate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Missing reason, or no person identified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such review
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Already decided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /service/donations/network:
     get:
       tags:
@@ -2816,6 +3035,11 @@ tags:
     description: |
       Grouping donations into a case with an account of what connects them, and
       drawing a report from it. Reports come from cases, never from scores.
+  - name: Entity Resolution
+    description: |
+      Deciding whether two names are one donor. Resolution sets the accuracy
+      ceiling of every cumulative rule: a donor split across spellings is
+      several donors, each under the limit.
   - name: Quarantine
     description: |
       Records that could not be admitted, and the work of correcting them.
