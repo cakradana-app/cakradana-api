@@ -94,6 +94,18 @@ jobs:
       - name: Extraction evaluation
         run: node --test test/extraction-evaluation.test.js
 
+      # The recovery objectives are a claim about something that has not
+      # happened yet, and the usual way such a claim turns out to be false is
+      # that the backups ran fine and nobody ever restored one. This stage
+      # restores one: it seeds a store, backs it up, restores the archive into a
+      # clean database, and compares what came out against what went in.
+      #
+      # It runs a real mongod, downloaded by mongodb-memory-server on first use.
+      # It is never skipped when one cannot be started — a drill that skips is a
+      # recovery plan nobody has tested, reported as a passing suite.
+      - name: Restore drill
+        run: node --test test/resilience.test.js
+
       # Also named separately, and for the same reason: these are the only
       # tests that exercise a write. `npm test` above already runs them, but a
       # harness that silently fell back to skipping would leave the run green
