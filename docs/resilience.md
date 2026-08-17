@@ -40,6 +40,15 @@ What is captured and why each collection cannot simply be rebuilt is listed in
 `BACKUP_SET`; what is deliberately left out, and why, is listed in
 `NOT_BACKED_UP` next to it.
 
+Neither list is maintained on trust. A test loads the application, asks mongoose
+which collections the service can write, and fails if any of them appears in
+neither list — because a collection added later is not omitted from the backup
+by anybody's decision, it is omitted because the lists live in a different file
+from the model and nothing connected them. Six had accumulated that way when the
+check was written, three of them holding judgement nothing regenerates: an
+analyst's case narrative, the decisions about whether to tell a subject they had
+been flagged, and the near matches a person had already resolved.
+
 ### Strong identifiers
 
 `entityidentifiers` is in the set for the same reason as the labels: nothing

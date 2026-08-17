@@ -312,6 +312,50 @@ test('every backed-up collection says why it cannot be rebuilt', () => {
     }
 });
 
+test('every collection this service defines is either backed up or deliberately not', () => {
+    // The check that keeps the two lists honest as the system grows. A
+    // collection added later is not omitted from the backup by anybody's
+    // decision — it is omitted because the lists are in a different file from
+    // the model, and nothing connected them. Six collections had accumulated in
+    // exactly that way when this was written, three of them holding human
+    // judgement that nothing regenerates: an analyst's case narrative, the
+    // decisions about whether to tell a subject they had been flagged, and the
+    // near matches a person had already resolved.
+    //
+    // Loading the app is what makes the question answerable: mongoose then
+    // knows every collection the service can write, so the answer cannot drift
+    // from a list somebody maintains by hand.
+    require('../app/server');
+
+    const classified = new Set([
+        ...BACKUP_SET.map((entry) => entry.collection),
+        ...NOT_BACKED_UP.map((entry) => entry.collection),
+    ]);
+
+    const unclassified = mongoose
+        .modelNames()
+        .map((name) => mongoose.model(name).collection.name)
+        .filter((collection) => !classified.has(collection))
+        .sort();
+
+    assert.deepEqual(
+        unclassified,
+        [],
+        `${unclassified.join(', ')} is written by this service and appears in neither ` +
+            'BACKUP_SET nor NOT_BACKED_UP. Decide which, and say why: an omission ' +
+            'nobody wrote down is indistinguishable from an oversight, and this one ' +
+            'is invisible until a restore comes up short',
+    );
+});
+
+test('a collection is not claimed to be both backed up and excluded', () => {
+    const backed = BACKUP_SET.map((entry) => entry.collection);
+    const excluded = NOT_BACKED_UP.map((entry) => entry.collection);
+    const both = backed.filter((collection) => excluded.includes(collection));
+    assert.deepEqual(both, [], `${both.join(', ')} appears in both lists`);
+    assert.equal(new Set(backed).size, backed.length, 'a collection is backed up twice');
+});
+
 test('the schema fingerprint changes when a backed-up schema changes', () => {
     const before = schemaFingerprint();
     Donation.schema.path('amountIdr');

@@ -184,6 +184,35 @@ const BACKUP_SET = Object.freeze([
             'running. Losing one loses the contest and the clock on it',
     }),
     Object.freeze({
+        collection: 'cases',
+        model: () => require('../services/cases/case.model').Case,
+        because:
+            "an analyst's account of what connects a set of donations, and the unit " +
+            'every report is drawn from. The system can say that twenty-three ' +
+            'donations converged on one recipient in nine days; the sentence saying ' +
+            'why that is worth an authority\'s attention came from a person, and ' +
+            'nothing regenerates it',
+    }),
+    Object.freeze({
+        collection: 'notifications',
+        model: () => require('../services/notifications/notification.model').Notification,
+        because:
+            'decisions about whether to tell a subject they have been flagged, ' +
+            'including the decisions to say nothing and the reasons given for them. ' +
+            'The whole design rests on an unrecorded decision to withhold being ' +
+            'distinguishable from an oversight, which a lost collection makes ' +
+            'impossible exactly when somebody asks why a subject was never told',
+    }),
+    Object.freeze({
+        collection: 'resolutionreviews',
+        model: () => require('../services/entities/resolution-review.model').ResolutionReview,
+        because:
+            'near matches a person has already decided, and the ones still waiting ' +
+            'with their clocks running. Resolution sets the accuracy ceiling of every ' +
+            'cumulative rule, so a decided merge that has to be decided again is a ' +
+            'donor who is three donors until somebody notices twice',
+    }),
+    Object.freeze({
         collection: 'entityidentifiers',
         model: () => require('../identity/identifier.model').EntityIdentifier,
         because:
@@ -221,6 +250,28 @@ const NOT_BACKED_UP = Object.freeze([
             'published view of data that may itself have been corrected in the meantime',
     }),
     Object.freeze({
+        collection: 'publicoperations',
+        because:
+            'the published operating statistics, materialised from donations and ' +
+            'disputes by the same build. Derived from what is backed up, and a ' +
+            'restored stale copy would publish figures that no longer describe the ' +
+            'store they claim to count',
+    }),
+    Object.freeze({
+        collection: 'publicaggregates_building',
+        because:
+            'the collection a rebuild is assembled in. It is never the published ' +
+            'dataset — it becomes one by being renamed — so anything found in it is ' +
+            'either half a build or debris from one that died',
+    }),
+    Object.freeze({
+        collection: 'publicdatasetbuilds',
+        because:
+            'the history of publication builds against the store that was lost. ' +
+            'Carried into a recovered store it would date a dataset that store never ' +
+            'built, which is the same claim the backup history must not inherit',
+    }),
+    Object.freeze({
         collection: 'jobs',
         because:
             'progress handles for uploads in flight. A job restored into a new ' +
@@ -246,7 +297,7 @@ const NOT_BACKED_UP = Object.freeze([
  * least once, the manifest also records a fingerprint computed from the schemas
  * themselves, so a restore can report drift the constant did not.
  */
-const SCHEMA_VERSION = '2026.08.3';
+const SCHEMA_VERSION = '2026.08.4';
 
 /**
  * A digest over the declared field paths of every backed-up collection.
