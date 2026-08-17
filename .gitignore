@@ -29,7 +29,11 @@ jspm_packages/
 
 # Gatsby files
 .cache/
-public/
+# Anchored to the repository root. Unanchored, this matched a directory called
+# `public` at any depth — including `app/domains/public/`, the published-dataset
+# domain, whose four source files were therefore in no clone but this one. A
+# fresh checkout could not start the server and could not run the tests.
+/public/
 
 # Parcel-bundler cache (https://parceljs.org/)
 .cache
