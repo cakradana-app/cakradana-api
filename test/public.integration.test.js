@@ -243,14 +243,13 @@ test('no served cell carries a score, band, or flag under any name', async () =>
 
 test('the operations view counts without naming anybody', async () => {
     await cellWith(MIN_DONORS_PER_CELL);
+    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+
     const res = reply();
     await controller.operations({ query: {} }, res);
 
     assert.equal(res.sent.status, 200);
     assert.equal(res.sent.body.data.donations_held, MIN_DONORS_PER_CELL);
-    // No donation with no disputes should report a rate, because a rate over
-    // zero disputes is not zero — it is unmeasured.
-    assert.equal(res.sent.body.data.dispute_upheld_rate, null);
     assert.equal(JSON.stringify(res.sent.body).includes('Donor 0'), false);
 });
 
@@ -313,4 +312,53 @@ test('the response says the current quarter is absent by design', async () => {
     await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
     const sent = await serve();
     assert.match(sent.body.data.covers, /closed quarters only/);
+});
+
+test('the operations figures come from the build, not from a live count', async () => {
+    // The endpoint has no token in front of it and no cache behind it, so
+    // counting on demand meant three collection scans for anybody who asked, as
+    // often as they asked. A live count of donations held at single-record
+    // granularity is also a feed: polling it says when records were ingested
+    // and how many.
+    await cellWith(MIN_DONORS_PER_CELL);
+
+    const before = reply();
+    await controller.operations({ query: {} }, before);
+    assert.equal(before.sent.body.data.published, false);
+    // Distinguished from a system holding nothing, which zeroes would claim.
+    assert.match(before.sent.body.data.reason, /has not been built/);
+
+    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+
+    const after = reply();
+    await controller.operations({ query: {} }, after);
+    assert.equal(after.sent.body.data.published, true);
+    assert.equal(after.sent.body.data.donations_held, MIN_DONORS_PER_CELL);
+    assert.ok(after.sent.body.data.materialised_at);
+
+    // A donation admitted after the build does not move the published figure
+    // until the next one.
+    const party = await makeEntity('Partai Baru', 'political-party');
+    const donor = await makeEntity('Donor late');
+    await donate(donor, party, 10_000_000, 'late-1');
+
+    const stale = reply();
+    await controller.operations({ query: {} }, stale);
+    assert.equal(
+        stale.sent.body.data.donations_held,
+        MIN_DONORS_PER_CELL,
+        'the published count tracked a live ingestion',
+    );
+});
+
+test('an upheld rate over no disputes is unmeasured, not zero', async () => {
+    // Reporting zero would claim nothing has ever been contested successfully,
+    // which is a different and more flattering statement.
+    await cellWith(MIN_DONORS_PER_CELL);
+    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+
+    const res = reply();
+    await controller.operations({ query: {} }, res);
+    assert.equal(res.sent.body.data.disputes_raised, 0);
+    assert.equal(res.sent.body.data.dispute_upheld_rate, null);
 });

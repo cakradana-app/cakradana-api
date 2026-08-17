@@ -87,6 +87,37 @@ publicAggregateSchema.pre('validate', function refuseAnyVerdict(next) {
     return next();
 });
 
+/**
+ * The operation statistics, materialised.
+ *
+ * Counted on the schedule and served from here, rather than counted per
+ * request. Two reasons, and the second is the one that matters. The endpoint is
+ * unauthenticated and uncached, so counting live meant three collection scans
+ * on demand for anybody who asked, repeatedly, for free. And a live count of
+ * donations held, at single-record granularity, is a feed: polling it reveals
+ * when records are ingested and how many, which is information about the
+ * subjects of those records that nobody decided to publish.
+ *
+ * It also restores the property this domain is built on — that the public
+ * endpoints read the materialised collection and nothing else — which
+ * `operations` was the one exception to.
+ */
+const publicOperationsSchema = new mongoose.Schema(
+    {
+        donationsHeld: { type: Number, required: true },
+        disputesRaised: { type: Number, required: true },
+        disputesUpheld: { type: Number, required: true },
+        // Null rather than zero when there are no disputes. A rate over no
+        // disputes is not zero, it is unmeasured, and the difference is the
+        // whole point of publishing the figure.
+        disputeUpheldRate: { type: Number, default: null },
+        materialisedAt: { type: Date, required: true },
+    },
+    { timestamps: true },
+);
+
+const PublicOperations = mongoose.model('PublicOperations', publicOperationsSchema);
+
 const PublicAggregate = mongoose.model('PublicAggregate', publicAggregateSchema);
 
 /**
@@ -150,6 +181,7 @@ const PublicDatasetBuild = mongoose.model('PublicDatasetBuild', publicDatasetBui
 
 module.exports = {
     PublicAggregate,
+    PublicOperations,
     PublicAggregateStaging,
     PublicDatasetBuild,
     BUILDING_COLLECTION,

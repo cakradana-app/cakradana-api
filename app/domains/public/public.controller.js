@@ -14,6 +14,7 @@ const {
 } = require('../canonical/canonical.model');
 const {
     PublicAggregate,
+    PublicOperations,
     PublicAggregateStaging,
     PublicDatasetBuild,
     BUILDING_COLLECTION,
@@ -195,6 +196,7 @@ async function materialise({ now = new Date(), allowEmpty = false } = {}) {
     // a deletion leaves a published figure for a record that has since been
     // corrected or withdrawn.
     await swapIn(documents, { allowEmpty });
+    await materialiseOperations(now);
 
     const report = {
         cells: documents.length,
@@ -411,26 +413,85 @@ async function datasetState() {
  * figures by which an outside reader can judge whether the thing is working,
  * and they say nothing about any person.
  */
+/**
+ * Count what the operations endpoint reports, once per build.
+ *
+ * Counted here rather than per request. The endpoint has no token in front of
+ * it and no cache behind it, so counting on demand meant three collection scans
+ * for anybody who asked, as often as they asked. And a live count of donations
+ * held, at single-record granularity, is a feed: polling it tells an observer
+ * when records are ingested and how many, which is information about the
+ * subjects of those records that nobody decided to publish.
+ */
+async function materialiseOperations(now) {
+    const { Dispute } = require('../services/disputes/dispute.model');
+    const [donationsHeld, disputesRaised, disputesUpheld] = await Promise.all([
+        Donation.countDocuments({ supersededBy: null }),
+        Dispute.countDocuments({}),
+        Dispute.countDocuments({ outcome: { $in: ['upheld', 'partially_upheld'] } }),
+    ]);
+
+    await PublicOperations.deleteMany({});
+    await PublicOperations.create({
+        donationsHeld,
+        disputesRaised,
+        disputesUpheld,
+        // Null rather than zero. A rate over no disputes is unmeasured, and
+        // reporting it as zero would claim nothing has ever been contested
+        // successfully, which is a different and more flattering statement.
+        disputeUpheldRate: disputesRaised ? disputesUpheld / disputesRaised : null,
+        materialisedAt: now,
+    });
+}
+
+/**
+ * How the system itself is running.
+ *
+ * Volumes and dispute rates are publishable and worth publishing: they are the
+ * figures by which an outside reader can judge whether the thing is working,
+ * and they say nothing about any person.
+ *
+ * Served from the materialised record, like the aggregates, so this endpoint no
+ * longer reads the operational store. It was the one exception to the rule this
+ * domain is built on, and an exception is what somebody extending the handler
+ * would have followed.
+ */
 const operations = async (req, res) => {
     try {
-        const { Dispute } = require('../services/disputes/dispute.model');
-        const [donations, disputes, upheld] = await Promise.all([
-            Donation.countDocuments({ supersededBy: null }),
-            Dispute.countDocuments({}),
-            Dispute.countDocuments({ outcome: { $in: ['upheld', 'partially_upheld'] } }),
-        ]);
+        const held = await PublicOperations.findOne().lean();
+        if (!held) {
+            // Distinguished from a system holding nothing. Zeroes here would
+            // read as an empty store rather than a dataset nobody has built,
+            // and publishing is off by default, so the second is likelier.
+            return res.status(200).json({
+                status: 'success',
+                message: 'No operation statistics have been published',
+                data: {
+                    published: false,
+                    reason:
+                        'the published dataset has not been built; these figures are ' +
+                        'materialised on the same schedule as the aggregates',
+                    published_dataset: await datasetState(),
+                },
+            });
+        }
 
         return res.status(200).json({
             status: 'success',
             message: 'System operation statistics',
             data: {
-                donations_held: donations,
-                disputes_raised: disputes,
-                disputes_upheld: upheld,
+                published: true,
+                donations_held: held.donationsHeld,
+                disputes_raised: held.disputesRaised,
+                disputes_upheld: held.disputesUpheld,
                 // The rate matters more than the count and is the one figure
                 // that would embarrass the system if it were high, which is
                 // exactly why it belongs here.
-                dispute_upheld_rate: disputes ? upheld / disputes : null,
+                dispute_upheld_rate: held.disputeUpheldRate,
+                // Stated, because these are as fresh as the last build and a
+                // reader quoting them needs to know that rather than assume
+                // they are current.
+                materialised_at: held.materialisedAt,
                 published_dataset: await datasetState(),
             },
         });

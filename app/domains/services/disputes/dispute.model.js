@@ -95,6 +95,9 @@ disputeSchema.index({ state: 1, resolveBy: 1 });
 disputeSchema.index({ donationId: 1, createdAt: -1 });
 disputeSchema.index({ assignee: 1, state: 1 });
 disputeSchema.index({ raisedBy: 1, createdAt: -1 });
+// The upheld rate is the one published figure that would embarrass the system
+// if it were high, and it is counted on this field.
+disputeSchema.index({ outcome: 1 });
 
 disputeSchema.pre('validate', function setDeadlines(next) {
     if (this.isNew) {

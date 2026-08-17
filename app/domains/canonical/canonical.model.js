@@ -7,10 +7,13 @@
  * this is meant to hold, and a ceiling that arrives as a write failure rather
  * than as a warning.
  *
- * These collections are added alongside the existing document rather than
- * replacing it. The deployed service keeps reading and writing what it always
- * did; ingestion now writes both, so the canonical store fills up without
- * anything currently running having to change first.
+ * These collections were added alongside that document and have replaced it.
+ * Ingestion wrote both for as long as it took the canonical store to fill;
+ * it now writes only these, and the endpoints that read the old document read
+ * these instead. `scripts/backfill-canonical.js` moves what only the old
+ * document still holds, and until it has been run on a given deployment that
+ * document is the sole copy of those donations — which is why the recovery
+ * position measures it rather than assuming it is derived.
  */
 
 const mongoose = require('mongoose');
@@ -152,6 +155,9 @@ donationSchema.index({ recordedAt: 1 });
 // Not sparse: the field defaults to null rather than being absent, so every
 // document carries it and a sparse index would index all of them anyway.
 donationSchema.index({ legacyDonationId: 1 });
+// The live-record filter. Almost every read applies it, and the published
+// operation count is a count of exactly this.
+donationSchema.index({ supersededBy: 1 });
 
 const identifierSchema = new mongoose.Schema(
     {
