@@ -218,6 +218,27 @@ const detail = async (req, res) => {
                     actor: p.actor,
                 })),
                 source_document: donation.sourceDocument || null,
+                // How many independent sources reported this donation, and
+                // which. A record a filed return and a scraped page both
+                // describe stands on better evidence than either alone; one
+                // that only a scrape has ever mentioned is worth knowing about
+                // before a finding is put to the person it names.
+                corroboration: {
+                    sources: 1 + (donation.corroboration?.length || 0),
+                    single_source: (donation.corroboration?.length || 0) === 0,
+                    observations: [
+                        {
+                            channel: donation.channel,
+                            source_reference: donation.sourceDocument?.reference || null,
+                            observed_at: donation.recordedAt,
+                        },
+                        ...(donation.corroboration || []).map((c) => ({
+                            channel: c.channel,
+                            source_reference: c.sourceReference,
+                            observed_at: c.observedAt,
+                        })),
+                    ],
+                },
 
                 // Facts first, estimates second, and never merged.
                 legal_findings: event?.legalFindings || [],

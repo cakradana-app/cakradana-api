@@ -145,3 +145,85 @@ test('submitted fields are recorded as submitted, not extracted', () => {
     const candidate = toCandidate({ receiver: 'Partai Maju', amount: 100000, date: '2026-06-05' });
     assert.ok(candidate.provenance.every((p) => p.provenance === 'submitted'));
 });
+
+/**
+ * Cross-source corroboration.
+ *
+ * A donation described by both a filed return and a scraped page stands on
+ * better evidence than one only a scrape has ever mentioned, and a reviewer
+ * about to put a finding to the person it names should be able to see which
+ * they are looking at.
+ *
+ * The discipline that makes the count mean anything is what is refused: the
+ * same document arriving twice is not corroboration. Counting it would let a
+ * single source manufacture its own confirmation, and the confidence that
+ * followed would rest on one observation counted repeatedly.
+ */
+
+const { isIndependentSource } = require('../app/domains/canonical/ingest');
+
+function held(overrides = {}) {
+    return {
+        channel: 'web-scrape',
+        sourceDocument: { reference: 'https://kpu.go.id/ladk/123' },
+        corroboration: [],
+        ...overrides,
+    };
+}
+
+test('the same document arriving twice is not corroboration', () => {
+    assert.equal(
+        isIndependentSource(held(), {
+            channel: 'web-scrape',
+            sourceReference: 'https://kpu.go.id/ladk/123',
+        }),
+        false,
+    );
+});
+
+test('a document we have not seen corroborates, whatever channel it came through', () => {
+    // Two different filed returns describing the same donation are two
+    // sources, even though both arrive as scrapes.
+    assert.equal(
+        isIndependentSource(held(), {
+            channel: 'web-scrape',
+            sourceReference: 'https://kpu.go.id/lppdk/456',
+        }),
+        true,
+    );
+});
+
+test('a different channel with no document reference counts once', () => {
+    // A digital submission and a paper scan are not the same act of reporting,
+    // even when neither carries a document identifier.
+    assert.equal(isIndependentSource(held(), { channel: 'digital-form' }), true);
+});
+
+test('the same channel with no reference does not corroborate', () => {
+    assert.equal(isIndependentSource(held(), { channel: 'web-scrape' }), false);
+});
+
+test('a source already counted does not corroborate a second time', () => {
+    const record = held({
+        corroboration: [{ channel: 'paper-form', sourceReference: 'scan-77' }],
+    });
+    assert.equal(
+        isIndependentSource(record, { channel: 'paper-form', sourceReference: 'scan-77' }),
+        false,
+    );
+});
+
+test('a channel already counted through corroboration does not count again', () => {
+    const record = held({
+        corroboration: [{ channel: 'digital-form', sourceReference: null }],
+    });
+    assert.equal(isIndependentSource(record, { channel: 'digital-form' }), false);
+});
+
+test('a record with no source document is corroborated by the first reference', () => {
+    const record = held({ sourceDocument: null, channel: 'import' });
+    assert.equal(
+        isIndependentSource(record, { channel: 'import', sourceReference: 'batch-1' }),
+        true,
+    );
+});

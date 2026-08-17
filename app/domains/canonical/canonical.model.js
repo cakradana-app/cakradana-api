@@ -103,6 +103,28 @@ const donationSchema = new mongoose.Schema(
             type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Donation' }],
             default: [],
         },
+        // Independent reports of this same donation. A record that a filed
+        // return and a scraped page both describe is better evidence than
+        // either alone, and a record only one source has ever mentioned is
+        // worth knowing about too — particularly when that source is a scrape.
+        //
+        // Only genuinely independent observations are admitted. Re-uploading
+        // the same document twice is not corroboration, and counting it as
+        // such would let a single source manufacture its own confirmation.
+        corroboration: {
+            type: [
+                new mongoose.Schema(
+                    {
+                        channel: { type: String, enum: CHANNELS, required: true },
+                        sourceReference: { type: String, default: null },
+                        retrievedAt: { type: Date, default: null },
+                        observedAt: { type: Date, default: Date.now },
+                    },
+                    { _id: false },
+                ),
+            ],
+            default: [],
+        },
 
         // Records are never edited in place. A correction is a new version
         // with an author and a reason, and the prior version stays retrievable

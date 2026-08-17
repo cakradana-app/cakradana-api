@@ -149,13 +149,35 @@ async function ingestOne(candidate, options = {}) {
     // limit breach that never happened.
     const existing = await Donation.findOne({ dedupKey });
     if (existing) {
-        if (!existing.corroboratedBy.length || candidate.channel !== existing.channel) {
+        // A duplicate from a source we have not heard from before is
+        // corroboration; the same document arriving twice is not. Only the
+        // first is recorded, because counting a re-upload would let a single
+        // source manufacture its own confirmation.
+        const corroborating = isIndependentSource(existing, candidate);
+        if (corroborating) {
             await Donation.updateOne(
                 { _id: existing._id },
-                { $addToSet: { 'sourceDocument.reference': candidate.sourceReference } },
-            ).catch(() => {});
+                {
+                    $push: {
+                        corroboration: {
+                            channel: candidate.channel,
+                            sourceReference: candidate.sourceReference || null,
+                            retrievedAt: candidate.retrievedAt || null,
+                            observedAt: recordedAt,
+                        },
+                    },
+                },
+            );
         }
-        return { status: 'duplicate', donationId: existing._id, dedupKey };
+        return {
+            status: 'duplicate',
+            donationId: existing._id,
+            dedupKey,
+            corroborating,
+            // The count includes the original observation, so a record only
+            // one source has ever mentioned reads as 1 rather than 0.
+            sources: (existing.corroboration?.length || 0) + (corroborating ? 2 : 1),
+        };
     }
 
     const donation = await Donation.create({
@@ -349,6 +371,38 @@ function candidatesFromExtraction(extraction, { channel, sourceReference = null,
     });
 }
 
+/**
+ * Whether a duplicate came from a source we have not already counted.
+ *
+ * Corroboration only means something if the sources are independent. The same
+ * scraped page fetched twice, or the same scan re-uploaded, says nothing new;
+ * treating it as confirmation would let one source vouch for itself, and the
+ * confidence that follows would be built on a single observation counted
+ * repeatedly.
+ *
+ * A source reference the record has not seen counts, whatever channel it came
+ * through — two different filed returns describing the same donation are two
+ * sources. A different channel with no reference at all counts once: a digital
+ * form submission and a paper scan are not the same act of reporting, even when
+ * neither carries a document identifier.
+ */
+function isIndependentSource(existing, candidate) {
+    const reference = candidate.sourceReference || null;
+    const seenReferences = new Set(
+        [
+            existing.sourceDocument?.reference || null,
+            ...(existing.corroboration || []).map((c) => c.sourceReference || null),
+        ].filter(Boolean),
+    );
+    if (reference) return !seenReferences.has(reference);
+
+    const seenChannels = new Set([
+        existing.channel,
+        ...(existing.corroboration || []).map((c) => c.channel),
+    ]);
+    return !seenChannels.has(candidate.channel);
+}
+
 module.exports = {
     ingestOne,
     ingestBatch,
@@ -357,4 +411,5 @@ module.exports = {
     truncateToPrecision,
     validate,
     mirrorToLegacy,
+    isIndependentSource,
 };
