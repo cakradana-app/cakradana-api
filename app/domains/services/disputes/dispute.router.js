@@ -2,6 +2,7 @@ const express = require('express');
 const disputeRouter = express.Router();
 
 const verifyToken = require('../../../middlewares/auth/jwt/jwt.verify');
+const { requireRole, REVIEWERS } = require('../../../middlewares/auth/roles');
 const disputeController = require('./dispute.controller');
 
 // Raising is open to any authenticated subject. Restricting it to resolved
@@ -15,12 +16,12 @@ disputeRouter.post('/', verifyToken, disputeController.raise);
 // records.
 disputeRouter.get('/basis/:donationId', verifyToken, disputeController.basis);
 
-disputeRouter.get('/queue', verifyToken, disputeController.queue);
-disputeRouter.post('/acknowledge', verifyToken, disputeController.acknowledge);
-disputeRouter.post('/assign', verifyToken, disputeController.assign);
+disputeRouter.get('/queue', verifyToken, requireRole(REVIEWERS), disputeController.queue);
+disputeRouter.post('/acknowledge', verifyToken, requireRole(REVIEWERS), disputeController.acknowledge);
+disputeRouter.post('/assign', verifyToken, requireRole(REVIEWERS), disputeController.assign);
 
 // Adjudication. There is no path here that resolves a dispute without naming
 // the person resolving it.
-disputeRouter.post('/resolve', verifyToken, disputeController.resolve);
+disputeRouter.post('/resolve', verifyToken, requireRole('adjudicator', 'kpu_officer'), disputeController.resolve);
 
 module.exports = disputeRouter;

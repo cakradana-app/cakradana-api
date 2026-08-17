@@ -2,14 +2,19 @@ const express = require('express');
 const donationRouter = express.Router();
 
 const verifyToken = require('../../../middlewares/auth/jwt/jwt.verify');
+const { requireRole, REVIEWERS } = require('../../../middlewares/auth/roles');
 
 const donationController = require('./donation.controller');
 const labelsController = require('./labels.controller');
 const networkController = require('./network.controller');
 const caseController = require('./case.controller');
 
-donationRouter.get('/entities', verifyToken, donationController.entities);
-donationRouter.get('/list', verifyToken, donationController.list);
+// Everyone's donations, which is a reviewer's view rather than a subject's.
+donationRouter.get('/entities', verifyToken, requireRole(REVIEWERS), donationController.entities);
+donationRouter.get('/list', verifyToken, requireRole(REVIEWERS), donationController.list);
+
+// A subject's own attributions. Open to any account, and scoped to that
+// account rather than filtered in the client.
 donationRouter.get('/list-as-sender', verifyToken, donationController.listAsSender);
 donationRouter.get('/list-as-receiver', verifyToken, donationController.listAsReceiver);
 
@@ -23,23 +28,23 @@ donationRouter.post('/occurred-as-receiver', verifyToken, labelsController.confi
 
 // Human judgement about risk. These are the labels the model is measured
 // against; agreement with the behavioural heuristics is not a success metric.
-donationRouter.post('/disposition', verifyToken, labelsController.disposition);
-donationRouter.post('/dispute-outcome', verifyToken, labelsController.disputeOutcome);
+donationRouter.post('/disposition', verifyToken, requireRole(REVIEWERS), labelsController.disposition);
+donationRouter.post('/dispute-outcome', verifyToken, requireRole(REVIEWERS), labelsController.disputeOutcome);
 
-donationRouter.get('/queue', verifyToken, labelsController.queue);
+donationRouter.get('/queue', verifyToken, requireRole(REVIEWERS), labelsController.queue);
 
 // Clearing a set together records what they had in common. The same donations
 // cleared one at a time lose it, and with it the only evidence that a false
 // positive is systematic rather than incidental.
-donationRouter.post('/bulk-clear', verifyToken, labelsController.bulkClear);
+donationRouter.post('/bulk-clear', verifyToken, requireRole(REVIEWERS), labelsController.bulkClear);
 
 // Everything needed to judge one donation, assembled before anyone is asked to
 // decide. A score with an approve button is automation with a signature.
-donationRouter.get('/case/:donationId', verifyToken, caseController.detail);
+donationRouter.get('/case/:donationId', verifyToken, requireRole(REVIEWERS), caseController.detail);
 
 // The donation graph. Findings attach to flows, never to the parties: moving a
 // statutory finding onto a person turns a fact about a payment into a label on
 // a name.
-donationRouter.get('/network', verifyToken, networkController.network);
+donationRouter.get('/network', verifyToken, requireRole(REVIEWERS), networkController.network);
 
 module.exports = donationRouter;

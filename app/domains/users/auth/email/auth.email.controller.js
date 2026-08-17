@@ -3,6 +3,7 @@ const Service = require('../../../services/services.model').Service;
 
 const bcrypt = require('bcrypt');
 const signToken = require('../../../../utils/auth/jwt/sign');
+const { DEFAULT_ROLE } = require('../../../../middlewares/auth/roles');
 const verifyAccessToken = require('../../../../utils/auth/jwt/verify');
 const mailrenderer = require('../../../../utils/mail/renderer');
 const mailsender = require('../../../../utils/mail/sender');
@@ -45,10 +46,15 @@ const register = async (req, res) => {
             });
         }
 
+        // The role travels in the token so that every request carries what
+        // the account may do without a lookup. A freshly registered account is
+        // a recipient: most people who sign up are subjects of this data, not
+        // reviewers of it.
         const userTokenSign = {
             name: name,
             email: email,
-            type: type
+            type: type,
+            role: newUser?.role || DEFAULT_ROLE
         }
         
         return res.status(200).json({
@@ -97,7 +103,8 @@ const login = async (req, res) => {
             const userTokenSign = {
                 name: getUser.name,
                 email: email,
-                type: getUser.type
+                type: getUser.type,
+                role: getUser.role || DEFAULT_ROLE
             }
             return res.status(200).json({
                 status: 'success',
