@@ -1009,3 +1009,57 @@ test('the run history is not carried into the store it was restored onto', async
     await connection.close();
     assert.equal(entries.length, 1);
 });
+
+/**
+ * The degradation that produces no error.
+ *
+ * Without the two secrets the identifier store refuses every value. Nothing
+ * fails: donations resolve, the graph builds, the queue fills — on names alone,
+ * which is a materially weaker basis for every rule that accumulates across
+ * records. The first sign is somebody noticing two people merged who share a
+ * name, which is late and is not obviously a configuration problem when it
+ * arrives.
+ *
+ * So the state is reported where a deployment reads it, and reported as a
+ * consequence rather than as a flag: `identifier_storage: not configured` says
+ * what is false, and the sentence beside it says what that costs.
+ */
+test('readiness reports identifier storage, and what its absence costs', async () => {
+    const uri = await newStore();
+    await mongoose.connect(uri);
+    const key = process.env.IDENTIFIER_KEY;
+    const pepper = process.env.IDENTIFIER_PEPPER;
+    try {
+        delete process.env.IDENTIFIER_KEY;
+        delete process.env.IDENTIFIER_PEPPER;
+
+        const absent = fakeResponse();
+        await health.ready({}, absent);
+        assert.equal(absent.statusCode, 200, 'a deployment without identifiers is still a deployment');
+        assert.equal(absent.body.data.identifier_storage, 'not configured');
+        assert.equal(absent.body.data.identifier_storage_affects_readiness, false);
+        assert.match(absent.body.data.identifier_storage_consequence, /names alone/);
+
+        // And the same fact as a gauge, emitted with the objectives rather than
+        // the store figures — so it is still answerable when the database is
+        // the thing that is down, which is when somebody is looking.
+        assert.match(await metrics.render(), /cakradana_identifier_storage_usable 0/);
+
+        process.env.IDENTIFIER_KEY = 'a'.repeat(64);
+        process.env.IDENTIFIER_PEPPER = 'test-pepper-'.repeat(4);
+
+        const present = fakeResponse();
+        await health.ready({}, present);
+        assert.equal(present.body.data.identifier_storage, 'usable');
+        // The consequence is stated only when there is one. A deployment that
+        // holds identifiers should not be told what it would cost not to.
+        assert.equal(present.body.data.identifier_storage_consequence, undefined);
+        assert.match(await metrics.render(), /cakradana_identifier_storage_usable 1/);
+    } finally {
+        if (key === undefined) delete process.env.IDENTIFIER_KEY;
+        else process.env.IDENTIFIER_KEY = key;
+        if (pepper === undefined) delete process.env.IDENTIFIER_PEPPER;
+        else process.env.IDENTIFIER_PEPPER = pepper;
+        await mongoose.disconnect();
+    }
+});

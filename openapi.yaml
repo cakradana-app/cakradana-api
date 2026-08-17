@@ -1583,6 +1583,15 @@ paths:
         downstream is unavailable would turn a degraded system into an offline
         one and lose the records that were arriving.
 
+        Whether identifiers can be held at all is reported as
+        `identifier_storage`, and on the same terms. Its absence is the one
+        degradation here that produces no error: the store refuses every value,
+        entity resolution falls back to matching names, and everything
+        downstream goes on working on a materially weaker basis for every rule
+        that accumulates across records. When it is absent,
+        `identifier_storage_consequence` states that in the response rather
+        than leaving it to be discovered.
+
         The recovery position is reported on the same terms under `recovery`:
         the declared RPO and RTO, and how old the last verified backup is. A
         stale backup is a serious problem and is not improved by taking the

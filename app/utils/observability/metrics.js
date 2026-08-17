@@ -198,10 +198,18 @@ async function collectStoreGauges() {
  */
 function objectiveGauges() {
     const { OBJECTIVES } = require('../../domains/canonical/resilience');
+    const { configured } = require('../../domains/identity/identifier.model');
     return {
         cakradana_availability_objective_ratio: OBJECTIVES.availability.target,
         cakradana_rpo_objective_seconds: OBJECTIVES.rpo.hours * 3600,
         cakradana_rto_objective_seconds: OBJECTIVES.rto.hours * 3600,
+        // Emitted with the objectives rather than with the store gauges,
+        // because it is a fact about the configuration and is therefore
+        // answerable while the database is unreachable — which is exactly when
+        // somebody is looking. Zero means every identifier is being refused and
+        // entity resolution is running on names alone, a degradation that
+        // produces no error and no failed request.
+        cakradana_identifier_storage_usable: configured() ? 1 : 0,
     };
 }
 
@@ -220,6 +228,8 @@ const HELP = Object.freeze({
     cakradana_availability_objective_ratio: 'Declared availability target for the ingestion write path',
     cakradana_rpo_objective_seconds: 'Declared recovery point objective',
     cakradana_rto_objective_seconds: 'Declared recovery time objective',
+    cakradana_identifier_storage_usable:
+        'Whether strong identifiers can be held; 0 means resolution rests on names alone',
     cakradana_public_dataset_cells: 'Cells in the published dataset, suppressed ones included',
     cakradana_public_dataset_age_seconds: 'Age of the last successful publication build',
     cakradana_public_materialisations_total: 'Publication builds by outcome',
