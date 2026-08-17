@@ -12,7 +12,7 @@
  * place.
  */
 
-const { Quarantine } = require('../../canonical/canonical.model');
+const { Quarantine, QUARANTINE_SLA } = require('../../canonical/canonical.model');
 const { record } = require('../../canonical/retention');
 const { ingestBatch } = require('../../canonical/ingest');
 const { RETENTION } = require('../../canonical/retention');
@@ -54,6 +54,11 @@ const list = async (req, res) => {
         const expiryDays = RETENTION.quarantine.days;
         const now = Date.now();
 
+        const overdue = await Quarantine.countDocuments({
+            resolvedAt: null,
+            reviewBy: { $lt: new Date(now) },
+        });
+
         return res.status(200).json({
             status: 'success',
             message: 'Quarantined records',
@@ -61,6 +66,15 @@ const list = async (req, res) => {
                 total,
                 shown: items.length,
                 retention_days: expiryDays,
+                review_within_working_days: QUARANTINE_SLA.reviewWithinWorkingDays,
+                unresolved_and_overdue: overdue,
+                // The two clocks on these records run at different speeds and
+                // mean different things: one is when somebody was supposed to
+                // have read the record, the other is when it stops existing.
+                // Reporting only the second reads as a deadline and is not one.
+                clocks:
+                    'days_until_deleted is the retention period; review_by is ' +
+                    'when this record should have been looked at',
                 items: items.map((item) => ({
                     quarantine_id: String(item._id),
                     channel: item.channel,
@@ -71,6 +85,10 @@ const list = async (req, res) => {
                     created_at: item.createdAt,
                     resolved_at: item.resolvedAt,
                     resolved_by: item.resolvedBy,
+                    review_by: item.reviewBy || null,
+                    review_overdue: Boolean(
+                        !item.resolvedAt && item.reviewBy && now > new Date(item.reviewBy).getTime(),
+                    ),
                     // Surfaced per item rather than left to be inferred from a
                     // policy constant, because what expires is a record of a
                     // donation somebody may still be able to recover.

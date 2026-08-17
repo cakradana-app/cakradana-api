@@ -25,6 +25,7 @@ const {
     LABEL_SOURCES,
     LABEL_VALUES,
 } = require('../vocabulary');
+const { addWorkingDays } = require('../../utils/time/working-days');
 
 /**
  * A reference to an entity, resolved or not.
@@ -240,6 +241,12 @@ const quarantineSchema = new mongoose.Schema(
         detail: { type: [String], default: [] },
         payload: { type: mongoose.Schema.Types.Mixed, default: null },
         sourceReference: { type: String, default: null },
+        // When this record has to have been looked at. Distinct from the
+        // retention period, which is when it is deleted: knowing a record has
+        // eighty days left before deletion says nothing about whether anyone
+        // was supposed to have read it by now. A deadline that exists only as
+        // an intention cannot be queried, so nothing can find what is late.
+        reviewBy: { type: Date, default: null },
         resolvedAt: { type: Date, default: null },
         resolvedBy: { type: String, default: null },
     },
@@ -248,6 +255,42 @@ const quarantineSchema = new mongoose.Schema(
 
 quarantineSchema.index({ createdAt: -1 });
 quarantineSchema.index({ resolvedAt: 1 });
+// Unresolved and overdue is the query the queue is worked from.
+quarantineSchema.index({ resolvedAt: 1, reviewBy: 1 });
+
+/**
+ * Review deadline, in working days.
+ *
+ * Well inside the retention period on purpose. A quarantined record deleted
+ * unread is data loss with better bookkeeping — the donation is as absent from
+ * every cumulative total as if it had been dropped, and the reason nobody read
+ * makes no difference to the figures.
+ */
+const QUARANTINE_SLA = Object.freeze({ reviewWithinWorkingDays: 10 });
+
+quarantineSchema.pre('validate', function setReviewDeadline(next) {
+    if (!this.reviewBy) {
+        this.reviewBy = addWorkingDays(
+            this.createdAt || new Date(),
+            QUARANTINE_SLA.reviewWithinWorkingDays,
+        );
+    }
+    return next();
+});
+
+quarantineSchema.methods.slaStatus = function slaStatus(now = new Date()) {
+    const pending = !this.resolvedAt;
+    return {
+        review_by: this.reviewBy,
+        overdue: pending && this.reviewBy != null && now > this.reviewBy,
+        // Said plainly, because the two clocks on this record run at different
+        // speeds and mean different things.
+        consequence_while_open: pending
+            ? 'this record is in no cumulative total; a limit it would have ' +
+              'contributed to is being evaluated without it'
+            : null,
+    };
+};
 
 const scoringEventSchema = new mongoose.Schema(
     {
@@ -278,4 +321,11 @@ const Label = mongoose.model('Label', labelSchema);
 const Quarantine = mongoose.model('Quarantine', quarantineSchema);
 const ScoringEvent = mongoose.model('ScoringEvent', scoringEventSchema);
 
-module.exports = { Donation, Entity, Label, Quarantine, ScoringEvent };
+module.exports = {
+    Donation,
+    Entity,
+    Label,
+    Quarantine,
+    ScoringEvent,
+    QUARANTINE_SLA,
+};

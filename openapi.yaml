@@ -1605,8 +1605,13 @@ paths:
         been dropped.
 
         Oldest first, because quarantine has a retention period and working
-        newest-first would let the tail expire unread. Each item reports how
-        many days remain before it is deleted.
+        newest-first would let the tail expire unread.
+
+        Two clocks run on each record and they mean different things.
+        `days_until_deleted` is the retention period. `review_by` is when the
+        record should have been looked at, computed in working days when it was
+        quarantined and stored on the record, so an overdue item is overdue in
+        the data. Reporting only the first reads as a deadline and is not one.
       parameters:
         - name: resolved
           in: query
@@ -1629,7 +1634,7 @@ paths:
             maximum: 200
       responses:
         '200':
-          description: Quarantined records
+          description: Quarantined records, with both clocks and the overdue count
           content:
             application/json:
               schema:
