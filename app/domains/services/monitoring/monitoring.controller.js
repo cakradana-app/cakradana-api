@@ -14,6 +14,7 @@
 
 const scoring = require('../../../utils/scoring/client');
 const { record } = require('../../canonical/retention');
+const { resilienceReport } = require('../../canonical/resilience');
 
 const health = async (req, res) => {
     try {
@@ -141,4 +142,36 @@ const registers = async (req, res) => {
     }
 };
 
-module.exports = { health, alerts, registers };
+/**
+ * What this deployment promises about surviving an incident, and where it
+ * currently stands against that.
+ *
+ * The objectives and the position are served together on purpose. A dashboard
+ * showing "RPO 6h" and a green tick, with nothing saying what makes six the
+ * number, invites somebody to tighten it to one on the grounds that one sounds
+ * better — and the figure would then be breached by design, since the interval
+ * between full dumps is the only thing bounding it.
+ *
+ * The reply also states what is not covered. The gap between "there are
+ * backups" and "we can recover" is where recovery plans usually fail, and it is
+ * not closed by leaving the gap unmentioned.
+ */
+const resilience = async (req, res) => {
+    try {
+        const report = await resilienceReport();
+        return res.status(200).json({
+            status: 'success',
+            message: 'Recovery objectives and current position',
+            data: report,
+        });
+    } catch (err) {
+        console.error('Error reading resilience objectives:', err);
+        return res.status(500).json({
+            status: 'error',
+            message: process.env.DEBUG ? err.message : 'Internal Server Error',
+            data: {},
+        });
+    }
+};
+
+module.exports = { health, alerts, registers, resilience };

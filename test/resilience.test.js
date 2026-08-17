@@ -38,6 +38,9 @@ const { Donation, Entity, Label } = require('../app/domains/canonical/canonical.
 const { AuditEntry } = require('../app/domains/canonical/retention');
 const { Dispute } = require('../app/domains/services/disputes/dispute.model');
 const { User } = require('../app/domains/users/user.model');
+const health = require('../app/domains/health/health.controller');
+const monitoring = require('../app/domains/services/monitoring/monitoring.controller');
+const metrics = require('../app/utils/observability/metrics');
 const { backup } = require('../scripts/backup');
 const { restore, verifyStore, RestoreIncomplete } = require('../scripts/restore');
 
@@ -97,6 +100,22 @@ async function newStore() {
     databases += 1;
     url.pathname = `/drill_${process.pid}_${databases}`;
     return url.toString();
+}
+
+/** Enough of an Express response to read what a handler decided. */
+function fakeResponse() {
+    return {
+        statusCode: null,
+        body: null,
+        status(code) {
+            this.statusCode = code;
+            return this;
+        },
+        json(body) {
+            this.body = body;
+            return this;
+        },
+    };
 }
 
 function newWorkspace() {
@@ -474,6 +493,100 @@ test('a failed backup is recorded, so it is distinguishable from one never sched
     assert.equal(runs.length, 1);
     assert.equal(runs[0].outcome, 'failed');
     assert.match(runs[0].error, /empty/);
+});
+
+test('the declared objectives are scrapeable without reading the store', () => {
+    // The scrape most worth having is the one taken during an incident, which
+    // is when the database is the thing that is down. An alert comparing the
+    // backup age against the objective needs both numbers to be present.
+    const gauges = metrics.objectiveGauges();
+    assert.equal(gauges.cakradana_rpo_objective_seconds, OBJECTIVES.rpo.hours * 3600);
+    assert.equal(gauges.cakradana_rto_objective_seconds, OBJECTIVES.rto.hours * 3600);
+    assert.equal(gauges.cakradana_availability_objective_ratio, OBJECTIVES.availability.target);
+});
+
+test('the age of the last backup is exposed as a metric', async () => {
+    const uri = await newStore();
+    const out = newWorkspace();
+    await seed(uri);
+    await backup({ uri, out, log: quiet });
+
+    await mongoose.connect(uri);
+    try {
+        const scraped = await metrics.render();
+        // The figure an alert watches. Without it the RPO is a number in a
+        // file: an objective nothing measures cannot be breached, which is not
+        // the same as being met.
+        assert.match(scraped, /cakradana_backup_age_seconds \d+/);
+        assert.match(scraped, /cakradana_backup_ever_completed 1/);
+        assert.match(scraped, /cakradana_backup_last_success_timestamp_seconds \d+/);
+        assert.match(scraped, /# HELP cakradana_backup_age_seconds /);
+    } finally {
+        await mongoose.disconnect();
+    }
+});
+
+test('a store with no backup reports zero rather than omitting the series', async () => {
+    // An absent series reads as a scrape that did not run. Zero reads as what
+    // it is, and can be alerted on.
+    const uri = await newStore();
+    await mongoose.connect(uri);
+    try {
+        const scraped = await metrics.render();
+        assert.match(scraped, /cakradana_backup_ever_completed 0/);
+        assert.ok(!scraped.includes('cakradana_backup_age_seconds '));
+    } finally {
+        await mongoose.disconnect();
+    }
+});
+
+test('readiness reports the recovery position and does not depend on it', async () => {
+    const uri = await newStore();
+    await mongoose.connect(uri);
+    try {
+        const response = fakeResponse();
+        await health.ready({}, response);
+
+        // Ready, with a store that has never been backed up. Withdrawing from
+        // rotation over a stale backup would stop the ingestion whose records
+        // are the thing at risk.
+        assert.equal(response.statusCode, 200);
+        assert.equal(response.body.data.recovery.rpo_state, 'never');
+        assert.equal(response.body.data.recovery.rpo_affects_readiness, false);
+        assert.equal(response.body.data.recovery.rpo_hours, OBJECTIVES.rpo.hours);
+        assert.equal(response.body.data.recovery.rto_hours, OBJECTIVES.rto.hours);
+        assert.equal(
+            response.body.data.recovery.availability_target,
+            OBJECTIVES.availability.target,
+        );
+    } finally {
+        await mongoose.disconnect();
+    }
+});
+
+test('the monitoring endpoint serves the objectives with their reasoning and their limits', async () => {
+    const uri = await newStore();
+    const out = newWorkspace();
+    await seed(uri);
+    await backup({ uri, out, log: quiet });
+
+    await mongoose.connect(uri);
+    try {
+        const response = fakeResponse();
+        await monitoring.resilience({ query: {} }, response);
+
+        assert.equal(response.statusCode, 200);
+        const { data } = response.body;
+        assert.equal(data.rpo.state, 'meeting');
+        // The reasoning travels with the number. A dashboard showing "RPO 6h"
+        // and nothing about what makes six defensible invites somebody to set
+        // it to one.
+        assert.ok(data.objectives.rpo.because.length > 80);
+        assert.ok(data.notCovered.some((line) => /failover/.test(line)));
+        assert.equal(data.backupSet.length, BACKUP_SET.length);
+    } finally {
+        await mongoose.disconnect();
+    }
 });
 
 test('the run history is not carried into the store it was restored onto', async () => {

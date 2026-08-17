@@ -1194,6 +1194,40 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /service/monitoring/resilience:
+    get:
+      tags:
+        - Operations
+      summary: What this deployment promises about surviving an incident
+      description: |
+        The availability target, the recovery point objective, and the recovery
+        time objective, each with the reasoning that makes it defensible and
+        what would have to change before it could be tightened. Served together
+        with the current position — how old the last verified backup is — since
+        an objective nothing measures against cannot be breached, which is not
+        the same as being met.
+
+        The numbers describe the deployment that exists: one MongoDB process and
+        one API container, with no replica set, no standby, and no automated
+        failover. The reply says so explicitly under `notCovered`, because the
+        gap between "there are backups" and "we can recover" is where recovery
+        plans usually fail, and leaving it unmentioned does not close it.
+
+        Carries no donation content.
+      responses:
+        '200':
+          description: Objectives, the backup set, and the current recovery position
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /public/aggregates:
     get:
       tags:
@@ -1291,6 +1325,12 @@ paths:
         stored and their scores outstanding — refusing traffic because a
         downstream is unavailable would turn a degraded system into an offline
         one and lose the records that were arriving.
+
+        The recovery position is reported on the same terms under `recovery`:
+        the declared RPO and RTO, and how old the last verified backup is. A
+        stale backup is a serious problem and is not improved by taking the
+        service out of rotation, which would stop the ingestion whose records
+        are the thing at risk.
       security: []
       responses:
         '200':

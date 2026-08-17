@@ -11,11 +11,19 @@
  * down, with the donations stored and their scores outstanding — refusing
  * traffic because a downstream is unavailable would turn a degraded system into
  * an offline one, and lose the records that were arriving.
+ *
+ * Readiness also reports the recovery position: the declared RPO and RTO, and
+ * how old the last recoverable copy is. Reported for the same reason and with
+ * the same limit as the scoring service — an objective nobody can measure
+ * against is not an objective, and a stale backup is a serious problem that is
+ * not made better by taking the service out of rotation, which would stop the
+ * ingestion whose records are the thing at risk.
  */
 
 const mongoose = require('mongoose');
 
 const metrics = require('../../utils/observability/metrics');
+const { OBJECTIVES, rpoStatus } = require('../canonical/resilience');
 
 /** Alive. Deliberately touches nothing: a liveness probe that queries the database restarts the process when the database is slow. */
 const live = (req, res) =>
@@ -29,6 +37,14 @@ const ready = async (req, res) => {
     const scoringConfigured = Boolean(process.env.SCORING_SERVICE_URL);
 
     const isReady = state === 1;
+
+    // Only asked when the database is there to ask. A readiness probe that
+    // waits on a query it already knows will fail turns a disconnection into a
+    // timeout, which is a slower and less legible version of the same answer.
+    const rpo = isReady
+        ? await rpoStatus()
+        : { state: 'unknown', reason: 'the database is not connected', objectiveHours: OBJECTIVES.rpo.hours };
+
     return res.status(isReady ? 200 : 503).json({
         status: isReady ? 'success' : 'error',
         message: isReady ? 'ready' : 'not ready',
@@ -41,6 +57,19 @@ const ready = async (req, res) => {
             scoring_service: scoringConfigured ? 'configured' : 'not configured',
             scoring_affects_readiness: false,
             subject_notification: process.env.NOTIFY_SUBJECTS === 'true' ? 'enabled' : 'disabled',
+            recovery: {
+                availability_target: OBJECTIVES.availability.target,
+                rpo_hours: OBJECTIVES.rpo.hours,
+                rto_hours: OBJECTIVES.rto.hours,
+                last_backup_at: rpo.lastBackupAt ?? null,
+                backup_age_hours: rpo.ageHours ?? null,
+                rpo_state: rpo.state,
+                rpo_reason: rpo.reason ?? null,
+                // Same rule as the scoring service above, for a stronger
+                // reason: withdrawing from rotation over a stale backup stops
+                // the ingestion whose records are what the backup protects.
+                rpo_affects_readiness: false,
+            },
         },
     });
 };

@@ -79,6 +79,23 @@ async function storeGauges() {
             resolveBy: { $lt: new Date() },
         });
         gauges.cakradana_disputes_overdue = overdue;
+
+        // The recovery position. Without it the RPO is a number in a file: an
+        // objective that cannot be measured against cannot be breached, which
+        // is not the same as being met. The age is what an alert should watch;
+        // `ever_completed` separates a schedule that slipped from one that was
+        // never created, and those are different failures.
+        const { rpoStatus } = require('../../domains/canonical/resilience');
+        const rpo = await rpoStatus();
+        gauges.cakradana_backup_ever_completed = rpo.lastBackupAt ? 1 : 0;
+        if (rpo.lastBackupAt) {
+            const completed = new Date(rpo.lastBackupAt).getTime();
+            gauges.cakradana_backup_last_success_timestamp_seconds = Math.floor(completed / 1000);
+            gauges.cakradana_backup_age_seconds = Math.max(
+                0,
+                Math.floor((Date.now() - completed) / 1000),
+            );
+        }
     } catch (error) {
         // Reported as its own metric rather than as an empty response, so a
         // scrape that returns nothing is distinguishable from a store that
@@ -90,6 +107,24 @@ async function storeGauges() {
     return gauges;
 }
 
+/**
+ * The declared objectives themselves, as gauges.
+ *
+ * Emitted whether or not the database can be read, because an alert comparing
+ * the backup age against the objective needs both numbers, and the scrape most
+ * worth having is the one taken during an incident. They change only when
+ * somebody changes them in code, which is exactly the change worth seeing in a
+ * dashboard's history.
+ */
+function objectiveGauges() {
+    const { OBJECTIVES } = require('../../domains/canonical/resilience');
+    return {
+        cakradana_availability_objective_ratio: OBJECTIVES.availability.target,
+        cakradana_rpo_objective_seconds: OBJECTIVES.rpo.hours * 3600,
+        cakradana_rto_objective_seconds: OBJECTIVES.rto.hours * 3600,
+    };
+}
+
 const HELP = Object.freeze({
     cakradana_donations_total: 'Donations currently in force, excluding superseded versions',
     cakradana_quarantine_total: 'Records set aside because they could not be admitted',
@@ -99,6 +134,12 @@ const HELP = Object.freeze({
     cakradana_disputes_open: 'Disputes awaiting acknowledgement or resolution',
     cakradana_disputes_overdue: 'Disputes past their resolution deadline',
     cakradana_store_metrics_available: 'Whether the store-derived gauges could be read',
+    cakradana_backup_ever_completed: 'Whether any backup has ever completed against this store',
+    cakradana_backup_last_success_timestamp_seconds: 'Unix time of the last verified backup',
+    cakradana_backup_age_seconds: 'Age of the last verified backup; the figure to alert on against the RPO',
+    cakradana_availability_objective_ratio: 'Declared availability target for the ingestion write path',
+    cakradana_rpo_objective_seconds: 'Declared recovery point objective',
+    cakradana_rto_objective_seconds: 'Declared recovery time objective',
     cakradana_requests_total: 'HTTP requests by method, route, and status',
     cakradana_scoring_requests_total: 'Calls to the scoring service by outcome',
     cakradana_extraction_records_total: 'Extracted records by outcome',
@@ -128,6 +169,11 @@ async function render() {
         lines.push(`${name}_count${labels} ${stats.count}`);
         lines.push(`${name}_sum${labels} ${stats.sum}`);
         lines.push(`${name}_max${labels} ${stats.max}`);
+    }
+
+    for (const [name, value] of Object.entries(objectiveGauges())) {
+        helpFor(name);
+        lines.push(`${name} ${value}`);
     }
 
     for (const [name, value] of Object.entries(await storeGauges())) {
@@ -165,4 +211,12 @@ function reset() {
     histograms.clear();
 }
 
-module.exports = { increment, observe, render, requestMetrics, reset, storeGauges };
+module.exports = {
+    increment,
+    observe,
+    render,
+    requestMetrics,
+    reset,
+    storeGauges,
+    objectiveGauges,
+};

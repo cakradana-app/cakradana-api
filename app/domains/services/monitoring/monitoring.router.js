@@ -25,4 +25,14 @@ monitoringRouter.get(
     monitoringController.registers,
 );
 
+// Carries no donation content — objectives, the age of the last backup, and
+// what is not covered. Reachable by an administrator for that reason, who
+// configures the system and has no business in the queue.
+monitoringRouter.get(
+    '/resilience',
+    verifyToken,
+    requireRole(REVIEWERS, 'ml_engineer', 'administrator'),
+    monitoringController.resilience,
+);
+
 module.exports = monitoringRouter;
