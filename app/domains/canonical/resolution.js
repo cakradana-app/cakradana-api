@@ -103,16 +103,34 @@ async function resolveEntity(rawName, entityType = 'unknown', options = {}) {
         return { entity: null, confidence: 0, basis: 'no-identifying-tokens', requiresReview: true };
     }
 
-    // Exact match on the canonical form or a recorded alias, scoped by type.
-    // An individual and a company sharing a name are different parties.
+    const ofType = { $in: type === 'unknown' ? ENTITY_TYPES : [type, 'unknown'] };
+    // Entities merged away are excluded from every match below. Without that
+    // filter a merge lasted exactly until the next donation: the absorbed
+    // record kept its normalised name, matched exactly, short-circuited before
+    // the fuzzy path that would have raised a review, and the split identity
+    // came back — permanently, and now invisibly.
+    const live = { mergedInto: null };
+
+    // Exact match on the canonical form or a folded alias, scoped by type. An
+    // individual and a company sharing a name are different parties.
     const exact = await Entity.findOne({
-        normalisedName: normalised,
-        entityType: { $in: type === 'unknown' ? ENTITY_TYPES : [type, 'unknown'] },
+        ...live,
+        entityType: ofType,
+        $or: [{ normalisedName: normalised }, { normalisedAliases: normalised }],
     }).session(session);
 
     if (exact) {
         await noteSighting(exact, name, observedAt, session);
-        return { entity: exact, confidence: 1, basis: 'normalised-name', requiresReview: false };
+        return {
+            entity: exact,
+            confidence: 1,
+            // Distinguished so a reader can tell a donor matched under their
+            // own recorded name from one matched through a name an analyst
+            // decided was the same person.
+            basis:
+                exact.normalisedName === normalised ? 'normalised-name' : 'merged-alias',
+            requiresReview: false,
+        };
     }
 
     // Fuzzy candidates, restricted to entities sharing at least one token so
@@ -120,7 +138,8 @@ async function resolveEntity(rawName, entityType = 'unknown', options = {}) {
     const tokens = normalised.split(' ').filter((t) => t.length > 2);
     const candidates = tokens.length
         ? await Entity.find({
-              entityType: { $in: type === 'unknown' ? ENTITY_TYPES : [type, 'unknown'] },
+              ...live,
+              entityType: ofType,
               normalisedName: { $regex: tokens.map(escapeRegex).join('|') },
           })
               .limit(50)

@@ -47,23 +47,32 @@ async function unscored(limit = BATCH_SIZE) {
     ]);
 }
 
-/** Records whose score was invalidated by a correction. */
+/**
+ * Records whose score was invalidated by a correction.
+ *
+ * The marks are returned alongside the donations so the caller can clear them
+ * once the re-score lands. Re-scoring writes a *new* event, so without that the
+ * old event keeps its reason for ever: every sweep re-selects it, and a merge
+ * that marks thousands of a party's donations permanently occupies the batch
+ * budget, starving the genuinely unscored records the sweep exists for.
+ */
 async function stale(limit = BATCH_SIZE) {
     const events = await ScoringEvent.find({ rescoreReason: { $ne: null } })
         .sort({ scoredAt: 1 })
         .limit(limit)
         .lean();
-    if (!events.length) return [];
-    return Donation.find({
+    if (!events.length) return { donations: [], eventIds: [] };
+    const donations = await Donation.find({
         _id: { $in: events.map((e) => e.donationId) },
         supersededBy: null,
     });
+    return { donations, eventIds: events.map((e) => e._id) };
 }
 
 async function sweepOnce({ limit = BATCH_SIZE } = {}) {
     const pending = await unscored(limit);
     const invalidated = await stale(limit);
-    const donations = [...pending, ...invalidated];
+    const donations = [...pending, ...invalidated.donations];
 
     if (!donations.length) {
         return { attempted: 0, scored: 0, stillPending: 0, available: true };
@@ -72,6 +81,18 @@ async function sweepOnce({ limit = BATCH_SIZE } = {}) {
     const result = await scoring.scoreMany(donations, {
         requestId: `sweep-${donations.length}`,
     });
+
+    // Cleared only on a successful pass. If the scoring service was
+    // unreachable the marks have to survive, or the invalidated donations are
+    // silently dropped and keep their stale scores.
+    let cleared = 0;
+    if (result.available && invalidated.eventIds.length) {
+        const done = await ScoringEvent.updateMany(
+            { _id: { $in: invalidated.eventIds } },
+            { $set: { rescoreReason: null } },
+        );
+        cleared = done.modifiedCount ?? 0;
+    }
 
     metrics.increment('cakradana_scoring_sweep_total', {
         outcome: result.available ? 'ok' : 'unavailable',
@@ -86,6 +107,7 @@ async function sweepOnce({ limit = BATCH_SIZE } = {}) {
         attempted: donations.length,
         scored: result.scored.length,
         still_pending: result.pending.length,
+        rescore_marks_cleared: cleared,
         available: result.available,
         reason: result.reason || null,
     });
@@ -94,6 +116,7 @@ async function sweepOnce({ limit = BATCH_SIZE } = {}) {
         attempted: donations.length,
         scored: result.scored.length,
         stillPending: result.pending.length,
+        rescoreMarksCleared: cleared,
         available: result.available,
         reason: result.reason || null,
     };

@@ -44,6 +44,16 @@ const SLA = Object.freeze({
     reviewWithinWorkingDays: 5,
 });
 
+/**
+ * How many open reviews one submitting account may put at the front of the
+ * queue before the rest are set aside.
+ *
+ * Not a fraud control — a genuine bulk uploader legitimately produces many near
+ * matches. It is a bound on how far one caller can reorder a queue whose whole
+ * value is that its order reflects which donors are currently being miscounted.
+ */
+const MAX_OPEN_PER_ACTOR = 25;
+
 const RESOLUTION_REVIEW_STATES = Object.freeze([
     'open',
     'merged',
@@ -84,6 +94,18 @@ const resolutionReviewSchema = new mongoose.Schema(
         // is a queue nobody works.
         occurrences: { type: Number, default: 1, min: 1 },
 
+        // Who submitted the donation that raised this. Ingestion is open to
+        // any authenticated account by design — submitters are the point — so
+        // one account can raise unlimited near matches by inventing a new
+        // spelling each time. Recording the source is what lets the queue tell
+        // a reviewer's backlog from one caller's output.
+        raisedByActor: { type: String, default: null },
+        // Set when one account has already raised more open reviews than the
+        // cap. Still queued and still decidable: the pair may be genuine, and
+        // dropping it would lose a real near match. But it does not compete for
+        // position with reviews the system found on its own.
+        deprioritised: { type: Boolean, default: false },
+
         state: { type: String, enum: RESOLUTION_REVIEW_STATES, default: 'open' },
         raisedAt: { type: Date, default: Date.now },
         reviewBy: { type: Date, required: true },
@@ -106,7 +128,8 @@ const resolutionReviewSchema = new mongoose.Schema(
 
 // The queue is read oldest-deadline-first, and the pair lookup happens on every
 // ingestion of a near match.
-resolutionReviewSchema.index({ state: 1, reviewBy: 1 });
+resolutionReviewSchema.index({ state: 1, deprioritised: 1, reviewBy: 1 });
+resolutionReviewSchema.index({ raisedByActor: 1, state: 1 });
 resolutionReviewSchema.index({ entityId: 1, candidateId: 1, state: 1 });
 
 resolutionReviewSchema.pre('validate', function setDeadline(next) {
@@ -160,4 +183,9 @@ const ResolutionReview = mongoose.model(
     resolutionReviewSchema,
 );
 
-module.exports = { ResolutionReview, RESOLUTION_REVIEW_STATES, SLA };
+module.exports = {
+    ResolutionReview,
+    RESOLUTION_REVIEW_STATES,
+    SLA,
+    MAX_OPEN_PER_ACTOR,
+};

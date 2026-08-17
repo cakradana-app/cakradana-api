@@ -2,7 +2,11 @@ const express = require('express');
 const entityRouter = express.Router();
 
 const verifyToken = require('../../../middlewares/auth/jwt/jwt.verify');
-const { requireRole, REVIEWERS } = require('../../../middlewares/auth/roles');
+const {
+    requireRole,
+    requireRoleStrict,
+    REVIEWERS,
+} = require('../../../middlewares/auth/roles');
 const reviewController = require('./resolution-review.controller');
 
 // Soonest deadline first. While a review is open the cumulative limit rules
@@ -14,12 +18,21 @@ entityRouter.get('/review/:id', verifyToken, requireRole(REVIEWERS), reviewContr
 // Both decisions require a named actor and a reason. A merge attributes one
 // person's donations to another; keeping two records separate without a
 // recorded reason means the same pair is raised again by the next donation.
-entityRouter.post('/review/:id/merge', verifyToken, requireRole(REVIEWERS), reviewController.merge);
+//
+// Strict, so neither waits on the enforcement flag. Shadow mode is a sound
+// trade for a read — the cost of being wrong is a log line — and not for a
+// write that cannot be undone.
+entityRouter.post(
+    '/review/:id/merge',
+    verifyToken,
+    requireRoleStrict(REVIEWERS),
+    reviewController.merge,
+);
 
 entityRouter.post(
     '/review/:id/keep-separate',
     verifyToken,
-    requireRole(REVIEWERS),
+    requireRoleStrict(REVIEWERS),
     reviewController.keepSeparate,
 );
 

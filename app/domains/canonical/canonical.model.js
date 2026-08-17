@@ -162,6 +162,13 @@ const entitySchema = new mongoose.Schema(
         canonicalName: { type: String, required: true },
         normalisedName: { type: String, required: true },
         aliases: { type: [String], default: [] },
+        // The folded forms this entity also answers to, which is what
+        // resolution actually queries. `aliases` holds the names as observed,
+        // for a person reading the record; matching on those would fail on the
+        // punctuation and honorifics that folding exists to remove. A merge
+        // pushes the absorbed entity's folded name here, and that is what stops
+        // the next donation under the old spelling from recreating the split.
+        normalisedAliases: { type: [String], default: [] },
         entityType: { type: String, enum: ENTITY_TYPES, default: 'unknown' },
         identifiers: { type: [identifierSchema], default: [] },
         // Never inferred from a name. Name-based nationality inference is
@@ -204,6 +211,10 @@ const entitySchema = new mongoose.Schema(
 
 entitySchema.index({ normalisedName: 1, entityType: 1 });
 entitySchema.index({ aliases: 1 });
+entitySchema.index({ normalisedAliases: 1, entityType: 1 });
+// Every resolution query excludes entities merged away, so the filter has to
+// be indexed alongside the fields it accompanies.
+entitySchema.index({ mergedInto: 1 });
 entitySchema.index({ registers: 1 });
 
 const labelSchema = new mongoose.Schema(

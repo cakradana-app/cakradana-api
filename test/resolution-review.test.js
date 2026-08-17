@@ -165,3 +165,97 @@ test('a review cannot be filed in a state the vocabulary does not define', async
 test('a similarity outside the unit interval is refused', async () => {
     await assert.rejects(() => review({ similarity: 1.4 }).validate());
 });
+
+/**
+ * What one submitter can do to the queue.
+ *
+ * Ingestion is open to any authenticated account by design — submitters are the
+ * point — and every ingested near match now raises a review. A caller inventing
+ * a new spelling on each submission therefore raises a new pair every time, and
+ * the queue is ordered by deadline, so those rows land ahead of the ones the
+ * system found on its own.
+ *
+ * The queue's whole value is that its order says which donors are currently
+ * being miscounted. A caller who can set that order has taken it away.
+ */
+
+const {
+    MAX_OPEN_PER_ACTOR,
+} = require('../app/domains/services/entities/resolution-review.model');
+
+test('a review records which account submitted the donation behind it', async () => {
+    const queued = review({ raisedByActor: 'submitter@example.org' });
+    await queued.validate();
+    assert.equal(queued.raisedByActor, 'submitter@example.org');
+});
+
+test('a review is not set aside by default', async () => {
+    const queued = review();
+    await queued.validate();
+    assert.equal(queued.deprioritised, false);
+});
+
+test('a review past one submitter’s cap is set aside, not discarded', async () => {
+    // Dropping it would lose a real near match: the pair may be genuine, and
+    // the same donor really may be being counted twice.
+    const queued = review({
+        raisedByActor: 'submitter@example.org',
+        deprioritised: true,
+    });
+    await queued.validate();
+    assert.equal(queued.deprioritised, true);
+    assert.equal(queued.state, 'open');
+    assert.ok(queued.reviewBy instanceof Date);
+});
+
+test('the cap is a bound on queue position, not a fraud threshold', () => {
+    // A genuine bulk uploader legitimately produces many near matches, so the
+    // cap is set where one caller stops being able to reorder the queue rather
+    // than where their behaviour becomes suspicious.
+    assert.ok(MAX_OPEN_PER_ACTOR >= 20);
+});
+
+/**
+ * Defects found in review, each reproduced before being fixed.
+ *
+ * The first is the one that mattered: a merge that lasted until the next
+ * donation. `resolveEntity` matched on `normalisedName` with no filter for
+ * entities merged away, so the absorbed record kept matching exactly, short-
+ * circuited before the fuzzy path that would have raised a review, and the
+ * split identity came back — permanently, and now invisibly.
+ */
+
+const { Entity } = require('../app/domains/canonical/canonical.model');
+const { normaliseName } = require('../app/domains/canonical/resolution');
+
+test('an entity carries the folded names it answers to, not only observed ones', async () => {
+    // `aliases` holds names as written, for a person reading the record.
+    // Matching on those would fail on exactly the punctuation and honorifics
+    // that folding exists to remove, which is why resolution queries the
+    // folded forms and a merge has to write them.
+    const survivor = new Entity({
+        canonicalName: 'Budi Santoso',
+        normalisedName: normaliseName('Budi Santoso'),
+        aliases: ['Dr. Budi Santosa, S.E.'],
+        normalisedAliases: [normaliseName('Dr. Budi Santosa, S.E.')],
+    });
+    await survivor.validate();
+    assert.equal(survivor.normalisedAliases[0], 'budi santosa');
+    assert.notEqual(survivor.normalisedAliases[0], survivor.aliases[0]);
+});
+
+test('an entity merged away is marked, and the marker is a reference', async () => {
+    const merged = new Entity({
+        canonicalName: 'Budi Santosa',
+        normalisedName: 'budi santosa',
+        mergedInto: ENTITY_B,
+    });
+    await merged.validate();
+    assert.equal(String(merged.mergedInto), ENTITY_B);
+});
+
+test('a live entity has no merge marker', async () => {
+    const live = new Entity({ canonicalName: 'X', normalisedName: 'x' });
+    await live.validate();
+    assert.equal(live.mergedInto, null);
+});

@@ -19,7 +19,16 @@ const {
     ScoringEvent,
 } = require('../../canonical/canonical.model');
 const { record } = require('../../canonical/retention');
-const { ResolutionReview } = require('./resolution-review.model');
+const {
+    ResolutionReview,
+    RESOLUTION_REVIEW_STATES,
+    MAX_OPEN_PER_ACTOR,
+} = require('./resolution-review.model');
+
+//: Donations marked stale per round trip. Small enough that the `$in` stays
+//: far inside MongoDB's document limit, large enough that a party with a long
+//: history does not take thousands of round trips.
+const RESCORE_PAGE = 1000;
 
 function fail(res, status, message, data = {}) {
     return res.status(status).json({ status: 'error', message, data });
@@ -34,8 +43,16 @@ function serverError(res, err, context) {
     });
 }
 
+/**
+ * Who is making this decision, from the token and nowhere else.
+ *
+ * A caller-supplied actor would let somebody name themselves — or anybody
+ * else — on the permanent record of an irreversible merge. That record is what
+ * a subject contesting the merge is shown, so it has to be the one thing in
+ * the request the caller could not choose.
+ */
 function actorOf(req) {
-    return req.user?.email || req.user?.id || req.body?.actor || null;
+    return req.user?.email || null;
 }
 
 /**
@@ -46,7 +63,7 @@ function actorOf(req) {
  * admitted is worth more than the queue entry, and the pair will be seen again
  * on the next donation under either name.
  */
-async function raise({ resolution, donationId, observedName }) {
+async function raise({ resolution, donationId, observedName, actor = null }) {
     if (!resolution?.requiresReview || !resolution.candidate || !resolution.entity) {
         return null;
     }
@@ -55,18 +72,45 @@ async function raise({ resolution, donationId, observedName }) {
     if (String(entityId) === String(candidateId)) return null;
 
     try {
+        // Matched in either direction and against a decision already made.
+        //
+        // Direction, because a later resolution can produce the same pair with
+        // the roles swapped, which would read as a new question.
+        //
+        // And `kept-separate`, because the API tells the reviewer their
+        // decision means "this pair is not raised again" — while the lookup
+        // only matched open reviews, so the next donation under either spelling
+        // asked it again. That is the "same five questions permanently" outcome
+        // the reason field was supposed to prevent.
+        const pair = [
+            { entityId, candidateId },
+            { entityId: candidateId, candidateId: entityId },
+        ];
         const existing = await ResolutionReview.findOne({
-            entityId,
-            candidateId,
-            state: 'open',
+            $or: pair,
+            state: { $in: ['open', 'kept-separate'] },
         });
         if (existing) {
             // One question, however many donations ask it. Forty copies of the
-            // same pair is a queue nobody works.
+            // same pair is a queue nobody works, and a decided pair stays
+            // decided — the sighting is counted, not re-opened.
             existing.occurrences += 1;
             await existing.save();
             return existing;
         }
+
+        // Ingestion is open to any authenticated account by design, and a
+        // caller inventing a new spelling on each submission raises a new pair
+        // every time. Past the cap the review is still recorded — the pair may
+        // be genuine and dropping it would lose a real near match — but it
+        // stops competing for position in a queue whose order is supposed to
+        // say which donors are currently being miscounted.
+        const outstanding = actor
+            ? await ResolutionReview.countDocuments({
+                  raisedByActor: actor,
+                  state: 'open',
+              })
+            : 0;
 
         return await ResolutionReview.create({
             entityId,
@@ -76,6 +120,8 @@ async function raise({ resolution, donationId, observedName }) {
             similarity: resolution.confidence,
             basis: resolution.basis,
             donationId: donationId || null,
+            raisedByActor: actor,
+            deprioritised: outstanding >= MAX_OPEN_PER_ACTOR,
         });
     } catch (err) {
         console.error('raising a resolution review failed:', err);
@@ -92,21 +138,33 @@ async function raise({ resolution, donationId, observedName }) {
 const list = async (req, res) => {
     try {
         const limit = Math.min(Number.parseInt(req.query.limit, 10) || 50, 200);
-        const filter = {};
-        if (req.query.state) filter.state = req.query.state;
-        else filter.state = 'open';
+        // Checked against the vocabulary rather than passed through. Express
+        // parses `?state[$ne]=open` into an object, which would reach mongoose
+        // as an operator instead of a value.
+        const requested = String(req.query.state ?? '');
+        const filter = {
+            state: RESOLUTION_REVIEW_STATES.includes(requested) ? requested : 'open',
+        };
         if (req.query.overdue === 'true') {
             filter.reviewBy = { $lt: new Date() };
             filter.state = 'open';
         }
 
         const total = await ResolutionReview.countDocuments(filter);
+        // The headline count excludes what one submitter queued past the cap.
+        // It is read as "how wrong the limit evaluation is right now", and a
+        // figure any caller can inflate does not support that reading.
         const overdue = await ResolutionReview.countDocuments({
             state: 'open',
+            deprioritised: false,
             reviewBy: { $lt: new Date() },
         });
+        const setAside = await ResolutionReview.countDocuments({
+            state: 'open',
+            deprioritised: true,
+        });
         const reviews = await ResolutionReview.find(filter)
-            .sort({ reviewBy: 1 })
+            .sort({ deprioritised: 1, reviewBy: 1 })
             .limit(limit);
 
         return res.status(200).json({
@@ -116,6 +174,9 @@ const list = async (req, res) => {
                 total,
                 returned: reviews.length,
                 open_and_overdue: overdue,
+                // Reported rather than hidden: these are real near matches and
+                // still need deciding, they just do not set the queue's order.
+                set_aside_from_one_submitter: setAside,
                 // Stated on the queue rather than left to be inferred. The
                 // count is the number of donors currently being counted twice.
                 what_open_means:
@@ -130,6 +191,7 @@ const list = async (req, res) => {
                     occurrences: review.occurrences,
                     donation_id: review.donationId,
                     raised_at: review.raisedAt,
+                    set_aside: review.deprioritised,
                     sla: review.slaStatus(),
                 })),
             },
@@ -260,6 +322,30 @@ const merge = async (req, res) => {
             return fail(res, 409, `This review is already ${review.state}`);
         }
 
+        // Neither side may already have been merged away. Repointing into a
+        // tombstone would bury the donations one level deeper, and overwriting
+        // an existing `mergedInto` would destroy the trail a subject contesting
+        // the earlier merge has to follow.
+        const [merged, survivor] = await Promise.all([
+            Entity.findById(review.entityId).lean(),
+            Entity.findById(review.candidateId).lean(),
+        ]);
+        if (!merged || !survivor) {
+            return fail(res, 404, 'One of these entities no longer exists');
+        }
+        for (const [label, entity] of [['observed', merged], ['candidate', survivor]]) {
+            if (entity.mergedInto) {
+                return fail(
+                    res,
+                    409,
+                    `The ${label} entity was already merged into another record; ` +
+                        'this review was raised before that happened and has to be ' +
+                        're-examined against the surviving entity',
+                    { merged_into: entity.mergedInto },
+                );
+            }
+        }
+
         const survivorId = review.candidateId;
         const mergedId = review.entityId;
 
@@ -280,38 +366,94 @@ const merge = async (req, res) => {
         // against the split identity and is now wrong. Marking them is what
         // makes the merge reach the findings rather than stopping at the
         // records.
-        const affected = await Donation.find({
-            $or: [
-                { 'senderRef.entityId': survivorId },
-                { 'receiverRef.entityId': survivorId },
-            ],
-        })
-            .select('_id')
-            .lean();
-        const stale = await ScoringEvent.updateMany(
-            { donationId: { $in: affected.map((d) => d._id) } },
-            {
-                rescoreReason: `entities merged by ${actor}: ${reason}`,
-            },
-        );
+        // Paged rather than collected. Merging two spellings of a party name
+        // is entirely plausible at this similarity threshold, and that party's
+        // every donation would otherwise be loaded into memory and then turned
+        // into one query document — which exceeds MongoDB's 16 MB limit outright
+        // well before it finishes, and stalls the request long before that.
+        const rescoreReason = `entities merged by ${actor}: ${reason}`;
+        let staleCount = 0;
+        let cursorId = null;
+        for (;;) {
+            const filter = {
+                $or: [
+                    { 'senderRef.entityId': survivorId },
+                    { 'receiverRef.entityId': survivorId },
+                ],
+            };
+            if (cursorId) filter._id = { $gt: cursorId };
+            const page = await Donation.find(filter)
+                .select('_id')
+                .sort({ _id: 1 })
+                .limit(RESCORE_PAGE)
+                .lean();
+            if (page.length === 0) break;
 
-        await Entity.updateOne(
-            { _id: survivorId },
+            const marked = await ScoringEvent.updateMany(
+                { donationId: { $in: page.map((d) => d._id) } },
+                { rescoreReason },
+            );
+            staleCount += marked.modifiedCount ?? 0;
+            cursorId = page[page.length - 1]._id;
+            if (page.length < RESCORE_PAGE) break;
+        }
+        const stale = { modifiedCount: staleCount };
+
+        // The survivor takes on everything the absorbed record held, not just
+        // its name. `firstSeen` is load-bearing — a donor's first appearance
+        // being a large donation is itself a signal — and losing a register
+        // membership would stop a statutory rule firing for that donor.
+        const carried = {
+            $addToSet: {
+                aliases: { $each: [review.observedName, ...(merged.aliases || [])] },
+                // The folded form is what resolution queries. Without it the
+                // next donation under the old spelling creates the split again.
+                normalisedAliases: {
+                    $each: [
+                        merged.normalisedName,
+                        ...(merged.normalisedAliases || []),
+                    ].filter(Boolean),
+                },
+                identifiers: { $each: merged.identifiers || [] },
+                registers: { $each: merged.registers || [] },
+            },
+            $push: {
+                mergeHistory: {
+                    mergedEntityId: mergedId,
+                    basis: review.basis,
+                    confidence: review.similarity,
+                    actor,
+                    at: new Date(),
+                },
+            },
+        };
+        if (merged.firstSeen) carried.$min = { firstSeen: merged.firstSeen };
+        if (merged.lastSeen) carried.$max = { lastSeen: merged.lastSeen };
+        await Entity.updateOne({ _id: survivorId }, carried);
+
+        // Retained, not removed. An un-merge needs something to un-merge.
+        await Entity.updateOne({ _id: mergedId }, { $set: { mergedInto: survivorId } });
+
+        // Any other open review naming the absorbed entity is now about a
+        // record that no longer resolves. Left open, merging one of them would
+        // repoint nothing and overwrite the trail this merge just wrote.
+        await ResolutionReview.updateMany(
             {
-                $addToSet: { aliases: review.observedName },
-                $push: {
-                    mergeHistory: {
-                        mergedEntityId: mergedId,
-                        basis: review.basis,
-                        confidence: review.similarity,
-                        actor,
-                        at: new Date(),
-                    },
+                state: 'open',
+                _id: { $ne: review._id },
+                $or: [{ entityId: mergedId }, { candidateId: mergedId }],
+            },
+            {
+                $set: {
+                    state: 'kept-separate',
+                    decidedBy: actor,
+                    decidedAt: new Date(),
+                    decisionReason:
+                        `superseded: ${mergedId} was merged into ${survivorId} — ` +
+                        're-raised automatically if the pair recurs',
                 },
             },
         );
-        // Retained, not removed. An un-merge needs something to un-merge.
-        await Entity.updateOne({ _id: mergedId }, { $set: { mergedInto: survivorId } });
 
         review.state = 'merged';
         review.decidedBy = actor;
