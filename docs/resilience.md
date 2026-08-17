@@ -71,9 +71,19 @@ in the metrics, rather than failing anywhere. That is the compensating control
 for scheduling being outside the application, and it is only a control if
 somebody alerts on it — see below.
 
-Archives are kept 30 days. They hold the same personal data the live store does
-and inherit the same handling standard, so they are not an indefinite second
-copy of political-affiliation data.
+Archives are kept 30 days, and each successful run deletes the ones past that.
+They hold the same personal data the live store does and inherit the same
+handling standard; without the pruning, a schedule running every six hours
+accumulates an unbounded second copy of political-affiliation data on a disk
+nobody is looking at, which is the retention problem relocated rather than
+solved.
+
+The pruning only ever considers directories inside `--out` that carry a manifest
+this tooling wrote, and takes their age from the manifest rather than the
+filesystem, since copying an archive resets every timestamp on it. Anything else
+in that directory is left alone, and an archive whose manifest cannot be read is
+reported and kept — deleting what cannot be identified is how a good archive
+goes missing. `--keep-days` changes the period; `--no-prune` disables it.
 
 ## Restoring
 

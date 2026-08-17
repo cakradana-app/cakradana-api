@@ -22,9 +22,13 @@
  *
  * Usage:
  *   node scripts/backup.js [--uri <mongodb-uri>] [--out <dir>] [--allow-empty]
+ *                          [--keep-days <n>] [--no-prune]
  *
  * `--out` names the parent directory; each run creates a timestamped archive
  * inside it. Defaults to `backups/` and to `MONGODB_URI` from the environment.
+ * Archives past the retention period are removed after a successful run, since
+ * an unbounded pile of copies of political-affiliation data is the problem the
+ * retention policy exists to prevent, relocated to a disk nobody watches.
  */
 
 require('dotenv').config();
@@ -34,6 +38,7 @@ const path = require('node:path');
 const mongoose = require('mongoose');
 
 const {
+    BACKUP_POLICY,
     BACKUP_SET,
     BACKUP_RUN_COLLECTION,
     SCHEMA_VERSION,
@@ -61,6 +66,8 @@ async function backup({
     uri = process.env.MONGODB_URI,
     out = DEFAULT_OUT,
     allowEmpty = false,
+    prune = true,
+    keepDays = BACKUP_POLICY.archiveRetentionDays,
     now = new Date(),
     log = console.log,
 } = {}) {
@@ -156,8 +163,12 @@ async function backup({
             error: null,
         });
 
+        // Only after a good archive exists. Pruning first would, on a run that
+        // then failed, leave fewer copies than before it started.
+        const pruned = prune ? pruneArchives({ out, now, keepDays, log }) : [];
+
         log(`backup complete: ${total} documents in ${archive}`);
-        return { archive, manifest };
+        return { archive, manifest, pruned };
     } catch (error) {
         fs.rmSync(partial, { recursive: true, force: true });
         // Recorded so that a run which failed is distinguishable from a run
@@ -183,6 +194,62 @@ async function backup({
 }
 
 /**
+ * Delete archives past the period they are kept for.
+ *
+ * An archive holds the same personal data the live store does and inherits the
+ * same handling standard. Without this, a schedule running every six hours
+ * accumulates an unbounded second copy of political-affiliation data on a disk
+ * nobody is looking at, which is the failure the retention policy exists to
+ * prevent, relocated.
+ *
+ * Two safeguards, because this deletes. Only directories inside the output
+ * directory that carry a manifest this format wrote are considered, so pointing
+ * `--out` at the wrong place removes nothing; and the age is taken from the
+ * manifest rather than from the filesystem, since copying an archive resets
+ * every timestamp on it. Interrupted runs are cleared on their directory name,
+ * which is the one case with no manifest to read.
+ */
+function pruneArchives({ out, now, keepDays, log }) {
+    const cutoff = now.getTime() - keepDays * 86_400_000;
+    const removed = [];
+
+    for (const entry of fs.readdirSync(out, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const directory = path.join(out, entry.name);
+
+        if (entry.name.endsWith('.partial')) {
+            // A backup that did not finish. It is not an archive and never
+            // becomes one, and leaving it invites somebody to restore it.
+            fs.rmSync(directory, { recursive: true, force: true });
+            removed.push(entry.name);
+            continue;
+        }
+
+        const manifestPath = path.join(directory, 'manifest.json');
+        if (!fs.existsSync(manifestPath)) continue;
+
+        let takenAt;
+        try {
+            takenAt = new Date(JSON.parse(fs.readFileSync(manifestPath, 'utf8')).takenAt).getTime();
+        } catch {
+            // Unreadable rather than old. Left alone and reported: deleting
+            // what cannot be identified is how a good archive goes missing.
+            log(`  leaving ${entry.name}: its manifest could not be read`);
+            continue;
+        }
+        if (Number.isFinite(takenAt) && takenAt < cutoff) {
+            fs.rmSync(directory, { recursive: true, force: true });
+            removed.push(entry.name);
+        }
+    }
+
+    if (removed.length > 0) {
+        log(`pruned ${removed.length} archive(s) older than ${keepDays} days`);
+    }
+    return removed;
+}
+
+/**
  * Write the run record through the raw collection.
  *
  * Deliberately not through the model: the script owns its own connection, and
@@ -200,6 +267,8 @@ function parseArgs(argv) {
         if (arg === '--uri') args.uri = argv[++i];
         else if (arg === '--out') args.out = path.resolve(argv[++i]);
         else if (arg === '--allow-empty') args.allowEmpty = true;
+        else if (arg === '--no-prune') args.prune = false;
+        else if (arg === '--keep-days') args.keepDays = Number.parseInt(argv[++i], 10);
         else throw new Error(`unrecognised argument: ${arg}`);
     }
     return args;
@@ -214,4 +283,4 @@ if (require.main === module) {
         });
 }
 
-module.exports = { backup, DEFAULT_OUT };
+module.exports = { backup, pruneArchives, DEFAULT_OUT };

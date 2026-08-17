@@ -41,7 +41,7 @@ const { User } = require('../app/domains/users/user.model');
 const health = require('../app/domains/health/health.controller');
 const monitoring = require('../app/domains/services/monitoring/monitoring.controller');
 const metrics = require('../app/utils/observability/metrics');
-const { backup } = require('../scripts/backup');
+const { backup, pruneArchives } = require('../scripts/backup');
 const { restore, verifyStore, RestoreIncomplete } = require('../scripts/restore');
 
 const quiet = () => {};
@@ -493,6 +493,50 @@ test('a failed backup is recorded, so it is distinguishable from one never sched
     assert.equal(runs.length, 1);
     assert.equal(runs[0].outcome, 'failed');
     assert.match(runs[0].error, /empty/);
+});
+
+test('archives are not kept forever, and an unfinished one is not left to be restored', async () => {
+    // An archive holds the same personal data the live store does. A schedule
+    // running every six hours with nothing removing anything is the retention
+    // problem relocated to a disk nobody watches.
+    const uri = await newStore();
+    const out = newWorkspace();
+    await seed(uri);
+
+    const old = new Date(Date.now() - (BACKUP_POLICY.archiveRetentionDays + 1) * 86_400_000);
+    const recent = new Date(Date.now() - 86_400_000);
+    await backup({ uri, out, now: old, log: quiet });
+    await backup({ uri, out, now: recent, log: quiet });
+    fs.mkdirSync(path.join(out, '20260101T000000Z.partial'));
+    // Not ours, and not identifiable. Deleting what cannot be identified is how
+    // a good archive goes missing.
+    fs.mkdirSync(path.join(out, 'something-else'));
+
+    const { pruned } = await backup({ uri, out, log: quiet });
+
+    const left = fs.readdirSync(out).sort();
+    assert.equal(pruned.length, 2);
+    assert.ok(!left.some((name) => name.endsWith('.partial')));
+    assert.ok(left.includes('something-else'));
+    assert.ok(left.includes('20260101T000000Z.partial') === false);
+    // The recent one and the run just taken.
+    assert.equal(left.filter((name) => /^\d{8}T\d{6}Z$/.test(name)).length, 2);
+});
+
+test('pruning removes nothing when pointed at a directory of things it did not write', () => {
+    const out = newWorkspace();
+    fs.mkdirSync(path.join(out, 'holiday-photos'));
+    fs.writeFileSync(path.join(out, 'notes.txt'), 'not an archive');
+
+    const removed = pruneArchives({
+        out,
+        now: new Date('2099-01-01T00:00:00.000Z'),
+        keepDays: 1,
+        log: quiet,
+    });
+
+    assert.deepEqual(removed, []);
+    assert.deepEqual(fs.readdirSync(out).sort(), ['holiday-photos', 'notes.txt']);
 });
 
 test('the declared objectives are scrapeable without reading the store', () => {
