@@ -153,7 +153,11 @@ async function collectStoreGauges() {
         // backup that omitted that collection would lose those donations
         // without anything reporting it. Cached inside, because the document
         // it reads can approach sixteen megabytes.
-        const legacy = await legacySingletonStatus();
+        // Cached readings only. The scrape must not be the thing that pays for
+        // this one: it reads a document that can approach sixteen megabytes,
+        // and every store gauge here shares one budget, so a slow read costs
+        // the backup age and the quarantine share as well as these two.
+        const legacy = await legacySingletonStatus({ cachedOnly: true });
         if (legacy.legacyOnly !== null) {
             gauges.cakradana_legacy_donations_total = legacy.held;
             gauges.cakradana_legacy_only_donations = legacy.legacyOnly;

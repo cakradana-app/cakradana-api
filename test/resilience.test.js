@@ -36,6 +36,7 @@ const {
 } = require('../app/domains/canonical/resilience');
 const {
     legacySingletonStatus,
+    refreshLegacySingletonStatus,
     forgetLegacySingletonStatus,
 } = require('../app/domains/canonical/resilience');
 const { Donation, Entity, Label } = require('../app/domains/canonical/canonical.model');
@@ -833,6 +834,20 @@ test('how much of the legacy document exists nowhere else is a metric', async ()
 
     await mongoose.connect(uri);
     try {
+        // The scrape does not pay for the reading. Every store figure here
+        // shares one time budget, and this one reads a document that can
+        // approach sixteen megabytes — so a slow read would cost the backup
+        // age and the quarantine share too, not just these two gauges.
+        const first = await metrics.render();
+        assert.ok(
+            !first.includes('cakradana_legacy_only_donations'),
+            'the first scrape waited for a reading it should have deferred',
+        );
+
+        // It does start one, though. A figure that appeared only after somebody
+        // opened the monitoring endpoint would be a figure no alert could watch.
+        await refreshLegacySingletonStatus();
+
         const scraped = await metrics.render();
         assert.match(scraped, /cakradana_legacy_donations_total 4/);
         assert.match(scraped, /cakradana_legacy_only_donations 3/);

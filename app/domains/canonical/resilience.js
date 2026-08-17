@@ -430,10 +430,59 @@ async function rpoStatus({ now = new Date() } = {}) {
  */
 const LEGACY_SINGLETON_CACHE_MS = 5 * 60 * 1000;
 let legacyStatusCache = null;
+let legacyRefreshInFlight = null;
 
-async function legacySingletonStatus({ maxAgeMs = LEGACY_SINGLETON_CACHE_MS } = {}) {
+/**
+ * Take a reading in the background, at most one at a time.
+ *
+ * Errors are swallowed on purpose: this is nobody's request, so there is no
+ * caller to report to, and the next reader sees `unknown` with its reason
+ * rather than a rejection nothing handled.
+ */
+function refreshLegacySingletonStatus() {
+    if (legacyRefreshInFlight) return legacyRefreshInFlight;
+    legacyRefreshInFlight = legacySingletonStatus({ maxAgeMs: 0 })
+        .catch(() => null)
+        .finally(() => {
+            legacyRefreshInFlight = null;
+        });
+    return legacyRefreshInFlight;
+}
+
+async function legacySingletonStatus({
+    maxAgeMs = LEGACY_SINGLETON_CACHE_MS,
+    cachedOnly = false,
+} = {}) {
     if (legacyStatusCache && Date.now() - legacyStatusCache.at < maxAgeMs) {
         return { ...legacyStatusCache.value, cached: true };
+    }
+
+    // Callers that must not block say so. The metrics scrape is one: its store
+    // figures share a single time budget, so this read running long there costs
+    // not just these two gauges but every other one collected alongside them —
+    // the backup age included, which is the figure an alert watches. A gauge
+    // omitted is a gauge nobody measured; a gauge that takes the others down
+    // with it is worse than absent.
+    //
+    // The refresh still happens, just not on the caller's clock. Otherwise the
+    // figure would appear only after somebody opened the monitoring endpoint,
+    // and an alert on a series that never exists never fires — which is the
+    // failure this whole measurement was added to prevent, one level up.
+    if (cachedOnly) {
+        refreshLegacySingletonStatus();
+        if (legacyStatusCache) {
+            return { ...legacyStatusCache.value, cached: true, stale: true };
+        }
+        return {
+            state: 'unknown',
+            held: null,
+            migrated: null,
+            legacyOnly: null,
+            because:
+                'not read yet on this process, and this caller asked not to wait for ' +
+                'it. A reading is being taken and will be here for the next scrape',
+            cached: false,
+        };
     }
 
     let value;
@@ -510,6 +559,7 @@ async function legacySingletonStatus({ maxAgeMs = LEGACY_SINGLETON_CACHE_MS } = 
 /** Forget the cached reading. For tests, and for a caller that has just run a backfill. */
 function forgetLegacySingletonStatus() {
     legacyStatusCache = null;
+    legacyRefreshInFlight = null;
 }
 
 /**
@@ -554,6 +604,7 @@ module.exports = {
     lastSuccessfulBackup,
     rpoStatus,
     legacySingletonStatus,
+    refreshLegacySingletonStatus,
     forgetLegacySingletonStatus,
     resilienceReport,
 };

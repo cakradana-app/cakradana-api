@@ -95,6 +95,12 @@ Reported at `GET /service/monitoring/resilience` and as
 because the document it reads can approach the sixteen-megabyte limit that is
 the reason for retiring it, and the number changes only when a backfill runs.
 
+The metrics scrape never takes the reading itself — it serves what is cached and
+starts a refresh for the next scrape. Every store figure on that endpoint shares
+one time budget, so a slow read here would cost the backup age and the
+quarantine share as well as these two gauges. The monitoring endpoint reads it
+fresh, because a person asked.
+
 Two behaviours are worth knowing before relying on it:
 
 - **It refuses to produce an empty archive.** A dump against the wrong database,
