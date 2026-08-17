@@ -1,5 +1,4 @@
 const User = require('../..//user.model').User;
-const Service = require('../../../services/services.model').Service;
 
 const bcrypt = require('bcrypt');
 const signToken = require('../../../../utils/auth/jwt/sign');
@@ -37,14 +36,6 @@ const register = async (req, res) => {
             type: type
         });
         await newUser.save();
-
-        let getService = await Service.findOne();
-        if (!getService) {
-            getService = await Service.create({
-                entities: [],
-                donations: []
-            });
-        }
 
         // The role travels in the token so that every request carries what
         // the account may do without a lookup. A freshly registered account is

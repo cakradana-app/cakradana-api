@@ -23,7 +23,6 @@ const { resolveEntity } = require('./resolution');
 const {
     raise: raiseResolutionReview,
 } = require('../services/entities/resolution-review.controller');
-const { Service } = require('../services/services.model');
 const { CHANNELS, TEMPORAL_PRECISIONS } = require('../vocabulary');
 
 /**
@@ -110,7 +109,7 @@ function validate(candidate) {
  * a caller processing a page can report per row.
  */
 async function ingestOne(candidate, options = {}) {
-    const { legacyService = null, actor = null } = options;
+    const { actor = null } = options;
 
     const problems = validate(candidate);
     if (problems.length) {
@@ -217,12 +216,6 @@ async function ingestOne(candidate, options = {}) {
         dedupKey,
     });
 
-    const mirrored = await mirrorToLegacy(candidate, legacyService);
-
-    if (mirrored?.legacyId) {
-        await Donation.updateOne({ _id: donation._id }, { legacyDonationId: mirrored.legacyId });
-    }
-
     // A near match that reaches nobody is a near match that never gets
     // decided, and until it is, the cumulative rules count one donor as two.
     // Raising is deliberately unable to fail the ingestion: the donation is
@@ -281,61 +274,15 @@ async function ingestOne(candidate, options = {}) {
  * branch that writes nothing, so the very first upload against a fresh
  * database was accepted, reported as successful, and silently discarded.
  */
-async function mirrorToLegacy(candidate, provided) {
-    let service = provided;
-    if (!service) {
-        service = await Service.findOne();
-        if (!service) {
-            service = await Service.create({ entities: [], donations: [] });
-        }
-    }
-
-    service.donations.push({
-        sender: candidate.senderName || null,
-        receiver: candidate.receiverName || null,
-        amount: candidate.amountIdr,
-        date: candidate.occurredAt,
-        type: candidate.channel === 'import' ? 'digital-form' : candidate.channel,
-    });
-
-    for (const [name, type] of [
-        [candidate.senderName, candidate.senderType],
-        [candidate.receiverName, candidate.receiverType],
-    ]) {
-        if (typeof name !== 'string' || name.trim() === '') continue;
-        if (service.entities.some((entity) => entity.name === name.trim())) continue;
-        service.entities.push({
-            name: name.trim(),
-            // The existing document's vocabulary is narrower than the shared
-            // one. A value it cannot store is omitted rather than coerced into
-            // a neighbouring category that would be wrong.
-            type: LEGACY_ENTITY_TYPES.has(type) ? type : undefined,
-        });
-    }
-
-    await service.save();
-    const legacyId = service.donations[service.donations.length - 1]?._id || null;
-    return { service, legacyId };
-}
-
-const LEGACY_ENTITY_TYPES = new Set([
-    'individual', 'corporation', 'organization', 'political-party', 'government', 'other',
-]);
-
 /**
  * Admit a batch, reporting per row.
  */
 async function ingestBatch(candidates, options = {}) {
     const results = [];
-    let service = null;
 
     for (const candidate of candidates) {
         try {
-            if (!service) {
-                service = await Service.findOne();
-                if (!service) service = await Service.create({ entities: [], donations: [] });
-            }
-            const outcome = await ingestOne(candidate, { ...options, legacyService: service });
+            const outcome = await ingestOne(candidate, options);
             results.push(outcome);
         } catch (error) {
             const quarantined = await Quarantine.create({
@@ -444,6 +391,5 @@ module.exports = {
     buildDedupKey,
     truncateToPrecision,
     validate,
-    mirrorToLegacy,
     isIndependentSource,
 };

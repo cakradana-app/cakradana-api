@@ -557,7 +557,21 @@ paths:
       summary: Confirm Donation as Sender
       description: |
         Confirm a donation where the authenticated user is the sender.
-        Sets the senderConfirmed flag to true for the specified donation.
+
+        Records that the transaction took place. It deliberately carries no
+        risk verdict: a donation split across many nominal donors is genuinely
+        received, and its recipient confirms it truthfully — so admitting a
+        confirmation as a clean label would teach a model that verified
+        splitting is fine. Only an analyst disposition or an adjudicated
+        dispute can say a donation is low risk.
+
+        The confirmation names the party that gave it, so that this side and
+        the receiver confirming are counted as two accounts of the transaction
+        rather than one party confirming twice.
+
+        A donation this account is not party to is refused with the same
+        response as one that does not exist, so the endpoint cannot be used to
+        discover which donation ids are held.
       requestBody:
         required: true
         content:
@@ -568,7 +582,7 @@ paths:
               donationId: "688b2f20f0acbf5985e32700"
       responses:
         '200':
-          description: Donation confirmed as sender successfully
+          description: Recorded that this donation occurred
           content:
             application/json:
               schema:
@@ -577,7 +591,7 @@ paths:
                   - type: object
                     properties:
                       data:
-                        $ref: '#/components/schemas/DonationRecord'
+                        $ref: '#/components/schemas/OccurrenceConfirmation'
         '400':
           description: Invalid request or user not found
           content:
@@ -610,7 +624,21 @@ paths:
       summary: Confirm Donation as Receiver
       description: |
         Confirm a donation where the authenticated user is the receiver.
-        Sets the receiverConfirmed flag to true for the specified donation.
+
+        Records that the transaction took place. It deliberately carries no
+        risk verdict: a donation split across many nominal donors is genuinely
+        received, and its recipient confirms it truthfully — so admitting a
+        confirmation as a clean label would teach a model that verified
+        splitting is fine. Only an analyst disposition or an adjudicated
+        dispute can say a donation is low risk.
+
+        The confirmation names the party that gave it, so that this side and
+        the sender confirming are counted as two accounts of the transaction
+        rather than one party confirming twice.
+
+        A donation this account is not party to is refused with the same
+        response as one that does not exist, so the endpoint cannot be used to
+        discover which donation ids are held.
       requestBody:
         required: true
         content:
@@ -621,7 +649,7 @@ paths:
               donationId: "688b2f20f0acbf5985e32700"
       responses:
         '200':
-          description: Donation confirmed as receiver successfully
+          description: Recorded that this donation occurred
           content:
             application/json:
               schema:
@@ -630,7 +658,7 @@ paths:
                   - type: object
                     properties:
                       data:
-                        $ref: '#/components/schemas/DonationRecord'
+                        $ref: '#/components/schemas/OccurrenceConfirmation'
         '400':
           description: Invalid request or user not found
           content:
@@ -3161,6 +3189,10 @@ components:
 
     DonationEntity:
       type: object
+      description: |
+        A resolved party. Entities that were merged into another record are not
+        listed: one of the things a merge is for is that the absorbed record
+        stops being counted as a second donor.
       properties:
         name:
           type: string
@@ -3171,6 +3203,56 @@ components:
           nullable: true
           description: Type/category of the entity
           example: "corporation"
+        aliases:
+          type: array
+          description: |
+            Other names this entity is known by, including the names of records
+            merged into it. A donation filed under any of these belongs here.
+          items:
+            type: string
+          example: ["PT Example Corporation"]
+        first_seen:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            When this party first appeared. Load-bearing rather than
+            decorative: a donor whose first appearance is a large donation is
+            itself a signal.
+        last_seen:
+          type: string
+          format: date-time
+          nullable: true
+          description: When this party last appeared.
+
+    OccurrenceConfirmation:
+      type: object
+      description: |
+        What a confirmation recorded. Named explicitly because the gap between
+        "this happened" and "this is fine" is widest exactly where this system
+        is most useful.
+      properties:
+        label_id:
+          type: string
+          description: The confirmation record.
+        confirmed_as:
+          type: string
+          enum: [sender, receiver]
+          description: Which side of the transaction gave this confirmation.
+        confirmed_by_both_parties:
+          type: boolean
+          description: |
+            Whether the other side has also confirmed. Two parties
+            independently confirming is a stronger account of a transaction
+            than one party confirming twice.
+        records:
+          type: string
+          example: "that the transaction took place"
+        does_not_record:
+          type: string
+          example: >-
+            that the donation is low risk; only an analyst disposition or an
+            adjudicated dispute can say that
 
     ConfirmDonationRequest:
       type: object

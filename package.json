@@ -8,6 +8,7 @@
     "test": "node --test test/*.test.js",
     "backup": "node scripts/backup.js",
     "restore": "node scripts/restore.js",
+    "backfill": "node scripts/backfill-canonical.js",
     "eval:extraction": "node scripts/evaluate-extraction.js"
   },
   "repository": {

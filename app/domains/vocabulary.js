@@ -36,6 +36,14 @@ const PROVENANCE = Object.freeze([
     'scraped',
     'human-corrected',
     'derived',
+    // Recovered from the store this service began with, which held every
+    // donation in one document and recorded nothing about where a value came
+    // from. Its own category because it is none of the others: nobody
+    // extracted it here, nobody submitted it here, and it was not computed. A
+    // record whose origin is unknown should say so rather than borrow the
+    // nearest word, because these are exactly the records an analyst should
+    // weigh differently.
+    'migrated',
 ]);
 
 /**
