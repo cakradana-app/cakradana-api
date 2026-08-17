@@ -259,4 +259,10 @@ it.
 - **The published dataset is not backed up.** It is materialised from donations
   on a schedule by `public.scheduler.js`, so it is rebuildable by construction —
   and restoring a stale copy would republish figures that may since have been
-  corrected. Losing it costs a rebuild, not a record.
+  corrected. Losing it costs a rebuild, not a record. It survives a *failed*
+  rebuild, which is a different property and one the build had to be changed to
+  provide: the new dataset is assembled in a staging collection and swapped in
+  with a rename, so a build that dies at any point leaves the previous one
+  serving. `GET /public/operations` reports whether the dataset exists, when it
+  was last built, and whether the last build failed, because an endpoint that
+  keeps answering says nothing about having stopped being refreshed.

@@ -249,7 +249,15 @@ async function swapIn(documents, { allowEmpty = false } = {}) {
     await db.createCollection(BUILDING_COLLECTION);
     const staging = db.collection(BUILDING_COLLECTION);
 
-    if (documents.length) await staging.insertMany(documents, { ordered: true });
+    // Written through the model, not the driver. The schema refuses any cell
+    // carrying a verdict, and that check exists precisely because the rebuild is
+    // the writer most likely to be extended by somebody who does not know the
+    // rule. Inserting into staging with the driver would skip it, and staging
+    // becomes the published dataset one line later.
+    if (documents.length) {
+        await PublicAggregateStaging.insertMany(documents, { ordered: true });
+    }
+
     for (const [keys, options] of PublicAggregate.schema.indexes()) {
         await staging.createIndex(keys, options);
     }

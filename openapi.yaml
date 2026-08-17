@@ -1501,6 +1501,14 @@ paths:
         the figures by which an outside reader can judge whether the system
         works — including the upheld-dispute rate, which is the one that would
         embarrass it if it were high, and is here for that reason.
+
+        `published_dataset` says whether there is a published dataset and when
+        it was last built. An empty cell list at `/public/aggregates` has three
+        quite different causes — nothing has ever been built, the last build
+        produced no publishable cell, or the builds have been failing and the
+        figures on offer are old — and the aggregates endpoint cannot tell them
+        apart from the cells alone. A reader quoting those figures needs to know
+        which it is.
       security: []
       responses:
         '200':

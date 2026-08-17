@@ -110,6 +110,20 @@ async function storeGauges() {
             gauges.cakradana_legacy_donations_total = legacy.held;
             gauges.cakradana_legacy_only_donations = legacy.legacyOnly;
         }
+
+        // A published dataset that stopped being rebuilt keeps answering, with
+        // figures that get quoted as current. The build failures are counted
+        // elsewhere; what nothing showed until now is how old the dataset
+        // actually is, which is the figure an alert can act on.
+        const { datasetState } = require('../../domains/public/public.controller');
+        const published = await datasetState();
+        gauges.cakradana_public_dataset_cells = published.cells;
+        if (published.built_at) {
+            gauges.cakradana_public_dataset_age_seconds = Math.max(
+                0,
+                Math.floor((Date.now() - new Date(published.built_at).getTime()) / 1000),
+            );
+        }
     } catch (error) {
         // Reported as its own metric rather than as an empty response, so a
         // scrape that returns nothing is distinguishable from a store that
@@ -154,6 +168,9 @@ const HELP = Object.freeze({
     cakradana_availability_objective_ratio: 'Declared availability target for the ingestion write path',
     cakradana_rpo_objective_seconds: 'Declared recovery point objective',
     cakradana_rto_objective_seconds: 'Declared recovery time objective',
+    cakradana_public_dataset_cells: 'Cells in the published dataset, suppressed ones included',
+    cakradana_public_dataset_age_seconds: 'Age of the last successful publication build',
+    cakradana_public_materialisations_total: 'Publication builds by outcome',
     cakradana_legacy_donations_total: 'Donation rows held in the legacy document',
     cakradana_legacy_only_donations:
         'Legacy rows with no canonical counterpart; above zero the legacy collection is the only copy',
