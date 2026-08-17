@@ -380,8 +380,10 @@ async function legacySingletonStatus({ maxAgeMs = LEGACY_SINGLETON_CACHE_MS } = 
 
         // Projected to the ids alone. The document this reads can approach
         // MongoDB's sixteen-megabyte limit — that ceiling is why it is being
-        // retired — so the answer is cached rather than recomputed on every
-        // metrics scrape. It changes only when a backfill runs.
+        // retired — and the lookup below is unindexed, so the pair is cached
+        // rather than recomputed on every metrics scrape. The number changes
+        // only when a backfill runs. Both sides are bounded by the same
+        // ceiling: there is at most one link per row the document can hold.
         const document = await Service.findOne().select('donations._id').lean();
         if (!document) {
             value = {
