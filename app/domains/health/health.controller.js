@@ -1,0 +1,54 @@
+/**
+ * Liveness and readiness.
+ *
+ * They answer different questions and conflating them is how a deployment
+ * rolls a healthy process into service that cannot do anything. Liveness asks
+ * whether the process is running; readiness asks whether it can serve a
+ * request, which here means the database is connected.
+ *
+ * The scoring service is checked and reported, but its absence does not make
+ * this service unready. Ingestion is designed to continue while scoring is
+ * down, with the donations stored and their scores outstanding — refusing
+ * traffic because a downstream is unavailable would turn a degraded system into
+ * an offline one, and lose the records that were arriving.
+ */
+
+const mongoose = require('mongoose');
+
+const metrics = require('../../utils/observability/metrics');
+
+/** Alive. Deliberately touches nothing: a liveness probe that queries the database restarts the process when the database is slow. */
+const live = (req, res) =>
+    res.status(200).json({ status: 'success', message: 'alive', data: { alive: true } });
+
+const READY_STATES = { 0: 'disconnected', 1: 'connected', 2: 'connecting', 3: 'disconnecting' };
+
+const ready = async (req, res) => {
+    const state = mongoose.connection.readyState;
+    const database = READY_STATES[state] || 'unknown';
+    const scoringConfigured = Boolean(process.env.SCORING_SERVICE_URL);
+
+    const isReady = state === 1;
+    return res.status(isReady ? 200 : 503).json({
+        status: isReady ? 'success' : 'error',
+        message: isReady ? 'ready' : 'not ready',
+        data: {
+            ready: isReady,
+            database,
+            // Reported rather than required. Its absence degrades scoring, not
+            // ingestion, and the difference is what keeps arriving records
+            // from being refused.
+            scoring_service: scoringConfigured ? 'configured' : 'not configured',
+            scoring_affects_readiness: false,
+            subject_notification: process.env.NOTIFY_SUBJECTS === 'true' ? 'enabled' : 'disabled',
+        },
+    });
+};
+
+/** Prometheus text format. */
+const metricsEndpoint = async (req, res) => {
+    res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+    return res.status(200).send(await metrics.render());
+};
+
+module.exports = { live, ready, metrics: metricsEndpoint };

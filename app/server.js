@@ -4,7 +4,16 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 const ejs = require('ejs');
 
+const { requestLogging } = require('./utils/observability/logging');
+const { requestMetrics } = require('./utils/observability/metrics');
+
 const app = express();
+
+// Before everything, so that a request rejected by CORS or by authentication
+// still carries a correlation id and still appears in the counts. Failures that
+// never reach a handler are exactly the ones nobody can otherwise see.
+app.use(requestLogging());
+app.use(requestMetrics());
 
 app.use(cors({
     origin: [
@@ -25,6 +34,9 @@ app.set('views', path.join(__dirname, 'templates/pages'));
 
 // Serve static files from the templates directory
 app.use(express.static(path.join(__dirname, 'templates')));
+
+const healthRouter = require('./domains/health/health.router');
+app.use('/', healthRouter);
 
 const userRouter = require('./domains/users/user.router');
 app.use('/user', userRouter);

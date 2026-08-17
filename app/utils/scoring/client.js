@@ -13,6 +13,8 @@
  */
 
 const { ScoringEvent } = require('../../domains/canonical/canonical.model');
+const { correlationId } = require('../observability/logging');
+const metrics = require('../observability/metrics');
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 
@@ -74,26 +76,42 @@ async function post(path, body, timeoutMs = DEFAULT_TIMEOUT_MS) {
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const started = Date.now();
     try {
         const response = await fetch(`${baseUrl()}${path}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 Authorization: `Bearer ${process.env.SCORING_SERVICE_TOKEN}`,
+                // Carried across the service boundary so a donation's path can
+                // be followed from the upload that brought it in through to the
+                // score. Two services with unrelated log identifiers cannot be
+                // joined after the fact.
+                ...(correlationId() ? { 'x-correlation-id': correlationId() } : {}),
             },
             body: JSON.stringify(body),
             signal: controller.signal,
         });
         if (!response.ok) {
             const detail = await response.text().catch(() => '');
+            metrics.increment('cakradana_scoring_requests_total', {
+                outcome: 'error',
+                status: response.status,
+            });
             throw new ScoringUnavailable(
                 `scoring service returned ${response.status}${detail ? `: ${detail.slice(0, 300)}` : ''}`,
             );
         }
+        metrics.increment('cakradana_scoring_requests_total', { outcome: 'ok' });
+        metrics.observe('cakradana_scoring_duration_ms', Date.now() - started, { path });
         return response.json();
     } catch (error) {
         if (error.name === 'AbortError') {
+            metrics.increment('cakradana_scoring_requests_total', { outcome: 'timeout' });
             throw new ScoringUnavailable(`scoring service did not respond within ${timeoutMs}ms`);
+        }
+        if (!(error instanceof ScoringUnavailable)) {
+            metrics.increment('cakradana_scoring_requests_total', { outcome: 'unreachable' });
         }
         throw error instanceof ScoringUnavailable
             ? error

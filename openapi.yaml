@@ -1010,6 +1010,77 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /health:
+    get:
+      tags:
+        - Operations
+      summary: Whether the process is running
+      description: |
+        Touches nothing. A liveness probe that queries the database restarts the
+        process whenever the database is slow, which is the moment a restart
+        helps least.
+      security: []
+      responses:
+        '200':
+          description: Alive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /ready:
+    get:
+      tags:
+        - Operations
+      summary: Whether the service can handle a request
+      description: |
+        Distinct from liveness: a process can be running and unable to serve
+        anything. Readiness here means the database is connected.
+
+        The scoring service is reported but does not affect readiness.
+        Ingestion is designed to continue while scoring is down, with donations
+        stored and their scores outstanding — refusing traffic because a
+        downstream is unavailable would turn a degraded system into an offline
+        one and lose the records that were arriving.
+      security: []
+      responses:
+        '200':
+          description: Ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '503':
+          description: Not ready, with which dependency is missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /metrics:
+    get:
+      tags:
+        - Operations
+      summary: Operational metrics in Prometheus text format
+      description: |
+        Counts and rates, never records. The figures are the ones whose silent
+        drift is dangerous rather than the ones easiest to collect: a quarantine
+        share climbing from 2% to 40% means an upstream form changed and most of
+        a filing period is being set aside, and it presents as an error
+        nowhere.
+
+        A scrape while the database is unreachable reports
+        `cakradana_store_metrics_available 0` rather than reporting zeros, which
+        would read as a system holding no donations.
+      security: []
+      responses:
+        '200':
+          description: Metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+
   /service/cases:
     get:
       tags:
@@ -2512,6 +2583,11 @@ tags:
     description: Web scraping and AI-powered donation data extraction
   - name: Donation Management
     description: Donation and entity data retrieval and management
+  - name: Operations
+    description: |
+      Liveness, readiness, and metrics. Unauthenticated: a probe that needs a
+      token fails when the auth path is what is broken, which is when the answer
+      matters most. None of them reveals anything about donations or people.
   - name: Cases
     description: |
       Grouping donations into a case with an account of what connects them, and
