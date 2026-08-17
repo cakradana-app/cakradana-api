@@ -82,8 +82,7 @@ async function recordOccurrence(req, res, party) {
             },
         });
     } catch (err) {
-        console.error('Error recording confirmation:', err);
-        return fail(res, 400, process.env.DEBUG ? err.message : 'Bad Request');
+        return serverError(res, err, 'Error recording confirmation');
     }
 }
 
@@ -142,8 +141,7 @@ const disposition = async (req, res) => {
             data: { label_id: label._id, supersedes: previous?._id || null },
         });
     } catch (err) {
-        console.error('Error recording disposition:', err);
-        return fail(res, 400, process.env.DEBUG ? err.message : 'Bad Request');
+        return serverError(res, err, 'Error recording disposition');
     }
 };
 
@@ -196,8 +194,7 @@ const disputeOutcome = async (req, res) => {
             },
         });
     } catch (err) {
-        console.error('Error recording dispute outcome:', err);
-        return fail(res, 400, process.env.DEBUG ? err.message : 'Bad Request');
+        return serverError(res, err, 'Error recording dispute outcome');
     }
 };
 
@@ -247,6 +244,13 @@ const queue = async (req, res) => {
         pipeline.push({ $limit: limit });
 
         const events = await ScoringEvent.aggregate(pipeline);
+
+        await record({
+            actor: req.user?.email || null,
+            action: 'read-review-queue',
+            subjectType: 'Donation',
+            subjectId: String(events.length),
+        });
 
         const donations = await Donation.find({
             _id: { $in: events.map((e) => e.donationId) },

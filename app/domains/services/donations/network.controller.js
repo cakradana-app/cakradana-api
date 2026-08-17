@@ -14,6 +14,7 @@
  */
 
 const { Donation, Entity, ScoringEvent } = require('../../canonical/canonical.model');
+const { record } = require('../../canonical/retention');
 
 /** Beyond this the picture stops being readable and starts being a hairball. */
 const MAX_EDGES = 750;
@@ -99,6 +100,13 @@ const network = async (req, res) => {
                 };
             });
 
+        await record({
+            actor: req.user?.email || null,
+            action: 'read-donation-network',
+            subjectType: 'Entity',
+            subjectId: String(entityIds.length),
+        });
+
         return res.status(200).json({
             status: 'success',
             message: 'Donation network',
@@ -115,9 +123,9 @@ const network = async (req, res) => {
         });
     } catch (err) {
         console.error('Error building network:', err);
-        return res.status(400).json({
+        return res.status(500).json({
             status: 'error',
-            message: process.env.DEBUG ? err.message : 'Bad Request',
+            message: process.env.DEBUG ? err.message : 'Internal Server Error',
             data: {},
         });
     }

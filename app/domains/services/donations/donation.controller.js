@@ -51,6 +51,12 @@ async function subjectScope(user) {
 
 const entities = async (req, res) => {
     try {
+        await record({
+            actor: req.user?.email || null,
+            action: 'list-entities',
+            subjectType: 'Entity',
+        });
+
         let getService = await Service.findOne();
         if (!getService) {
             getService = await Service.create({
@@ -69,9 +75,9 @@ const entities = async (req, res) => {
         });
     } catch(err) {
         console.error('Error:', err);
-        return res.status(400).json({
+        return res.status(500).json({
             status: 'error',
-            message: process.env.DEBUG ? err.message : "Bad Request",
+            message: process.env.DEBUG ? err.message : "Internal Server Error",
             data: {}
         });
     }
@@ -79,6 +85,12 @@ const entities = async (req, res) => {
 
 const list = async (req, res) => {
     try {
+        await record({
+            actor: req.user?.email || null,
+            action: 'list-donations',
+            subjectType: 'Donation',
+        });
+
         let getService = await Service.findOne();
         if (!getService) {
             getService = await Service.create({
@@ -97,9 +109,9 @@ const list = async (req, res) => {
         });
     } catch(err) {
         console.error('Error:', err);
-        return res.status(400).json({
+        return res.status(500).json({
             status: 'error',
-            message: process.env.DEBUG ? err.message : "Bad Request",
+            message: process.env.DEBUG ? err.message : "Internal Server Error",
             data: {}
         });
     }
@@ -248,9 +260,9 @@ const confirmAsSender = async (req, res) => {
         });
     } catch(err) {
         console.error('Error:', err);
-        return res.status(400).json({
+        return res.status(500).json({
             status: 'error',
-            message: process.env.DEBUG ? err.message : "Bad Request",
+            message: process.env.DEBUG ? err.message : "Internal Server Error",
             data: {}
         });
     }
@@ -316,9 +328,9 @@ const confirmAsReceiver = async (req, res) => {
         });
     } catch(err) {
         console.error('Error:', err);
-        return res.status(400).json({
+        return res.status(500).json({
             status: 'error',
-            message: process.env.DEBUG ? err.message : "Bad Request",
+            message: process.env.DEBUG ? err.message : "Internal Server Error",
             data: {}
         });
     }
