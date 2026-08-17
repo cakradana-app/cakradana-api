@@ -14,6 +14,7 @@ const donationRouter = require('./donations/donation.router');
 const disputeRouter = require('./disputes/dispute.router');
 const notificationRouter = require('./notifications/notification.router');
 const quarantineRouter = require('./quarantine/quarantine.router');
+const caseRouter = require('./cases/case.router');
 
 serviceRouter.use('/digital-form', digitalFormRouter);
 serviceRouter.use('/paper-form', paperFormRouter);
@@ -22,5 +23,6 @@ serviceRouter.use('/donations', donationRouter);
 serviceRouter.use('/disputes', disputeRouter);
 serviceRouter.use('/notifications', notificationRouter);
 serviceRouter.use('/quarantine', quarantineRouter);
+serviceRouter.use('/cases', caseRouter);
 
 module.exports = serviceRouter;

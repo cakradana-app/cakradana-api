@@ -1010,6 +1010,302 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /service/cases:
+    get:
+      tags:
+        - Cases
+      summary: List cases
+      parameters:
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [open, assembled, reported, closed]
+        - name: assignee
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+      responses:
+        '200':
+          description: Cases
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags:
+        - Cases
+      summary: Open a case
+      description: |
+        Several donations and the parties to them, held together by an analyst's
+        account of what connects them.
+
+        The narrative is the part that matters. The system can say that
+        twenty-three donations converged on one recipient in nine days; it
+        cannot say why that deserves an authority's attention, and the sentence
+        that says so has to come from a person who can be asked to defend it.
+
+        Entities are derived from the donations rather than supplied, so a case
+        cannot name a party to a transaction it does not contain.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaseRequest'
+      responses:
+        '201':
+          description: Case opened
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Missing title, or no person identified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      tags:
+        - Cases
+      summary: Amend a case
+      description: |
+        Entities are recomputed from the donations each time rather than
+        accumulated, so removing a donation removes the party it brought with
+        it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [case_id]
+              properties:
+                case_id:
+                  type: string
+                narrative:
+                  type: string
+                  nullable: true
+                donation_ids:
+                  type: array
+                  items:
+                    type: string
+                state:
+                  type: string
+                  enum: [open, assembled, reported, closed]
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: The case cannot advance in its current shape
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such case
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The case is closed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/cases/{caseId}:
+    get:
+      tags:
+        - Cases
+      summary: Read a case
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Case
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such case
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/cases/{caseId}/report/draft:
+    get:
+      tags:
+        - Cases
+      summary: Draft a suspicious activity report from a case
+      description: |
+        Read-only, and refused for a case with no narrative. A report drawn from
+        a set of donations with no account of what connects them is a formatted
+        rendering of a score presented to an authority as an accusation.
+
+        The draft states what it does not establish. Where any finding rests on
+        fixture reference data rather than an authoritative register, the draft
+        carries a blocking limitation and cannot be approved at all.
+
+        The structure has not been reviewed against the receiving authority's
+        current submission requirements, and every draft says so — a
+        well-formatted document is exactly the kind of thing people assume has
+        been checked.
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Draft, with its limitations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such case
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The case has no narrative
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/cases/report/approve:
+    post:
+      tags:
+        - Cases
+      summary: Approve a draft for manual submission
+      description: |
+        Approval is recorded; nothing is transmitted. This system has no route to
+        any receiving authority and is not going to acquire one — an accusation
+        of financial crime against a named person should leave the building by a
+        deliberate human act, not as a side effect of a threshold.
+
+        A draft carrying a blocking limitation is refused.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [case_id, draft]
+              properties:
+                case_id:
+                  type: string
+                draft:
+                  type: object
+                note:
+                  type: string
+                  nullable: true
+      responses:
+        '200':
+          description: Approved for manual submission; not transmitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such case
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: The draft cannot be approved, with the reason
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/cases/{caseId}/audit:
+    get:
+      tags:
+        - Cases
+      summary: Everything done to this case, and by whom
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Audit trail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /service/quarantine:
     get:
       tags:
@@ -1772,6 +2068,29 @@ components:
             subject who knows an attribution is wrong is not obliged to know
             what the right answer is.
 
+    CaseRequest:
+      type: object
+      required:
+        - title
+      properties:
+        title:
+          type: string
+        narrative:
+          type: string
+          nullable: true
+          description: |
+            What connects these donations. Required before the case can be
+            assembled or reported.
+        donation_ids:
+          type: array
+          items:
+            type: string
+        alert_ids:
+          type: array
+          items:
+            type: string
+          description: Structural cluster ids this case was built from
+
     BulkClearRequest:
       type: object
       required:
@@ -2193,6 +2512,10 @@ tags:
     description: Web scraping and AI-powered donation data extraction
   - name: Donation Management
     description: Donation and entity data retrieval and management
+  - name: Cases
+    description: |
+      Grouping donations into a case with an account of what connects them, and
+      drawing a report from it. Reports come from cases, never from scores.
   - name: Quarantine
     description: |
       Records that could not be admitted, and the work of correcting them.
