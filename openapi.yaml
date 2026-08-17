@@ -862,6 +862,322 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /service/donations/network:
+    get:
+      tags:
+        - Donation Management
+      summary: The donation network as a graph
+      description: |
+        Nodes are entities, edges are donations. Findings attach to the edges
+        they concern and never to a node: a statutory finding is a fact about a
+        payment, and moving it onto a party would turn it into a label on a
+        person.
+
+        Bounded by edge count, and the bound is reported. A view silently
+        showing the largest few hundred of many thousand flows would let an
+        analyst conclude that a recipient has few donors when the opposite is
+        true.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 750
+            maximum: 750
+      responses:
+        '200':
+          description: Donation network
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/disputes:
+    post:
+      tags:
+        - Disputes
+      summary: Contest an attribution
+      description: |
+        The route for a subject to say that a donation attributed to them is
+        wrong. Donations enter this system from documents the attributed person
+        never touched — a scan of somebody else's form, a scraped page — so an
+        attribution can be made about someone who had no part in creating it.
+
+        Raising a dispute does not change how the donation is scored. A design
+        in which contesting an attribution increases suspicion is coercive and
+        would make the remedy self-defeating.
+
+        Open to any authenticated subject, deliberately not restricted to
+        resolved parties: an attribution naming somebody in raw text and linked
+        to no entity is exactly the case that most needs contesting.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DisputeRequest'
+      responses:
+        '201':
+          description: Dispute recorded, with its acknowledgement and resolution deadlines
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request or unrecognised reason
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such donation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/disputes/basis/{donationId}:
+    get:
+      tags:
+        - Disputes
+      summary: Why a donation is attributed as it is
+      description: |
+        What a subject is told about an attribution they are contesting: the
+        values recorded, the source each was read from, and the text quoted from
+        that source.
+
+        Statutory findings are included, because they are facts with an article
+        behind them. Behavioural estimates are not: they rank donations against
+        each other for review and assert nothing about any person. The analyst's
+        evidence bundle is also excluded — it holds third-party records, and
+        handing it over would leak other people's data to whoever asks about
+        their own.
+      parameters:
+        - name: donationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Basis for the attribution
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such donation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/disputes/queue:
+    get:
+      tags:
+        - Disputes
+      summary: Disputes awaiting adjudication
+      description: |
+        Ordered by how close each item is to breaching its resolution deadline
+        rather than by arrival, so the queue surfaces what is about to go wrong
+        instead of what happens to be oldest.
+
+        Elapsed time is reported in working days. The calendar figure flatters
+        the wait by roughly a third, and this is a service-level number.
+      parameters:
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [open, acknowledged, resolved, withdrawn]
+        - name: assignee
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: unassigned
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+      responses:
+        '200':
+          description: Dispute queue with service-level status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/disputes/acknowledge:
+    post:
+      tags:
+        - Disputes
+      summary: Acknowledge receipt of a dispute
+      description: |
+        Acknowledgement is its own obligation with its own deadline. A subject
+        told nothing for three weeks has no way to distinguish a queue from a
+        void.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dispute_id]
+              properties:
+                dispute_id:
+                  type: string
+      responses:
+        '200':
+          description: Acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such dispute
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Already resolved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/disputes/assign:
+    post:
+      tags:
+        - Disputes
+      summary: Assign a dispute to an adjudicator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dispute_id, assignee]
+              properties:
+                dispute_id:
+                  type: string
+                assignee:
+                  type: string
+      responses:
+        '200':
+          description: Assigned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such dispute
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/disputes/resolve:
+    post:
+      tags:
+        - Disputes
+      summary: Adjudicate a dispute
+      description: |
+        Records the outcome and, where the subject was right, corrects the
+        record and marks every figure derived from it for re-scoring. Correcting
+        the row while leaving the cumulative totals that used it untouched
+        corrects nothing that matters.
+
+        The correction applied is derived from the reason given, so upholding a
+        dispute changes the specific thing that was wrong rather than adding a
+        note about it.
+
+        There is no path that resolves a dispute without naming the person
+        resolving it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DisputeResolutionRequest'
+      responses:
+        '200':
+          description: Resolved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request, or no adjudicator identified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such dispute
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Already resolved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
 components:
   securitySchemes:
     BearerAuth:
@@ -921,6 +1237,74 @@ components:
         value:
           type: string
           enum: [risky, not_risky, indeterminate]
+        note:
+          type: string
+          nullable: true
+
+    DisputeRequest:
+      type: object
+      required:
+        - donation_id
+        - reason
+        - party
+      properties:
+        donation_id:
+          type: string
+        party:
+          type: string
+          enum: [sender, receiver, third-party]
+          description: |
+            Which side of the transaction the subject says they are. A third
+            party contesting somebody else's attribution is a different case and
+            is recorded as one.
+        reason:
+          type: string
+          enum:
+            - not_mine
+            - wrong_amount
+            - wrong_date
+            - wrong_counterparty
+            - duplicate
+            - other
+          description: |
+            A controlled list rather than free text, because the reason
+            determines what correcting the record means. `other` carries free
+            text in `detail`, and exists so a subject with an objection nobody
+            anticipated is not forced to pick the nearest wrong one.
+        detail:
+          type: string
+          nullable: true
+          description: Required when the reason is `other`
+        proposed_correction:
+          type: object
+          nullable: true
+          description: |
+            What the subject says the record should say instead. Optional: a
+            subject who knows an attribution is wrong is not obliged to know
+            what the right answer is.
+
+    DisputeResolutionRequest:
+      type: object
+      required:
+        - dispute_id
+        - outcome
+      properties:
+        dispute_id:
+          type: string
+        outcome:
+          type: string
+          enum: [upheld, partially_upheld, rejected]
+          description: |
+            `partially_upheld` is a real outcome, not a hedge: a subject may be
+            right that the amount is wrong and wrong that the donation is not
+            theirs.
+        label_value:
+          type: string
+          enum: [risky, not_risky, indeterminate]
+          nullable: true
+          description: |
+            The training label this adjudication carries, if any. The strongest
+            available, because the matter was investigated.
         note:
           type: string
           nullable: true
@@ -1271,3 +1655,9 @@ tags:
     description: Web scraping and AI-powered donation data extraction
   - name: Donation Management
     description: Donation and entity data retrieval and management
+  - name: Disputes
+    description: |
+      Contesting an attribution, and adjudicating the contest. Donations enter
+      this system from documents the attributed person never touched, so the
+      route to say "this is not mine" is part of the product rather than an
+      administrative afterthought.

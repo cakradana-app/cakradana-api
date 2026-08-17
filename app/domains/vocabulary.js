@@ -63,6 +63,51 @@ const LABEL_SOURCES = Object.freeze([
 const LABEL_VALUES = Object.freeze(['risky', 'not_risky', 'indeterminate']);
 
 /**
+ * Why a subject says an attribution is wrong.
+ *
+ * A controlled list rather than free text, because the reason determines what
+ * correcting the record means: "not mine" removes an attribution, "wrong
+ * amount" changes a figure every cumulative total depends on. `other` carries
+ * free text, and exists so that a subject with a reason nobody anticipated is
+ * not forced to pick the nearest wrong one.
+ */
+const DISPUTE_REASONS = Object.freeze([
+    'not_mine',
+    'wrong_amount',
+    'wrong_date',
+    'wrong_counterparty',
+    'duplicate',
+    'other',
+]);
+
+/**
+ * Where a dispute sits.
+ *
+ * `acknowledged` is separate from `open` because acknowledgement carries its
+ * own deadline. A subject who is told nothing for three weeks has no way to
+ * tell a queue from a void.
+ */
+const DISPUTE_STATES = Object.freeze([
+    'open',
+    'acknowledged',
+    'resolved',
+    'withdrawn',
+]);
+
+/**
+ * How a dispute ended.
+ *
+ * `partially_upheld` is a real outcome, not a hedge: a subject may be right
+ * that the amount is wrong and wrong that the donation is not theirs, and
+ * flattening that to a binary loses the half that was correct.
+ */
+const DISPUTE_OUTCOMES = Object.freeze([
+    'upheld',
+    'partially_upheld',
+    'rejected',
+]);
+
+/**
  * How the model should describe each entity type it is asked to classify.
  * Generated into the prompt so the vocabulary cannot drift from the schema.
  */
@@ -88,4 +133,7 @@ module.exports = {
     IDENTITY_ABSENCE,
     LABEL_SOURCES,
     LABEL_VALUES,
+    DISPUTE_REASONS,
+    DISPUTE_STATES,
+    DISPUTE_OUTCOMES,
 };
