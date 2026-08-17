@@ -16,7 +16,10 @@
  * Only an analyst disposition or an adjudicated dispute carries a risk value.
  */
 
+const mongoose = require('mongoose');
+
 const { Donation, Label, ScoringEvent } = require('../../canonical/canonical.model');
+const { record } = require('../../canonical/retention');
 const { LABEL_VALUES } = require('../../vocabulary');
 
 /**
@@ -208,9 +211,10 @@ const disputeOutcome = async (req, res) => {
  */
 const queue = async (req, res) => {
     try {
-        const limit = Math.min(Number.parseInt(req.query.limit, 10) || 50, 200);
+        const { limit, budget } = queueBudget(req.query);
+        const filters = queueFilters(req.query);
 
-        const events = await ScoringEvent.aggregate([
+        const pipeline = [
             { $sort: { donationId: 1, scoredAt: -1 } },
             { $group: { _id: '$donationId', latest: { $first: '$$ROOT' } } },
             { $replaceRoot: { newRoot: '$latest' } },
@@ -220,9 +224,29 @@ const queue = async (req, res) => {
                     score: { $ifNull: ['$behavioural.score', 0] },
                 },
             },
-            { $sort: { hasFinding: -1, score: -1, scoredAt: -1 } },
-            { $limit: limit },
-        ]);
+        ];
+
+        if (Object.keys(filters.event).length > 0) {
+            pipeline.push({ $match: filters.event });
+        }
+
+        // Filters on the donation rather than the score need the donation, so
+        // they are resolved first and applied as an id set. The alternative —
+        // a lookup per event — turns one query into one per queue item.
+        if (Object.keys(filters.donation).length > 0) {
+            const matching = await Donation.find(filters.donation)
+                .select('_id')
+                .limit(5_000)
+                .lean();
+            pipeline.push({
+                $match: { donationId: { $in: matching.map((d) => d._id) } },
+            });
+        }
+
+        pipeline.push({ $sort: { hasFinding: -1, score: -1, scoredAt: -1 } });
+        pipeline.push({ $limit: limit });
+
+        const events = await ScoringEvent.aggregate(pipeline);
 
         const donations = await Donation.find({
             _id: { $in: events.map((e) => e.donationId) },
@@ -239,28 +263,214 @@ const queue = async (req, res) => {
         return res.status(200).json({
             status: 'success',
             message: 'Review queue',
-            data: events.map((event) => ({
-                donation: byId.get(String(event.donationId)) || null,
-                legal_findings: event.legalFindings,
-                // Rules that could not be evaluated travel with the item. A
-                // donation with no findings and several unevaluated rules has
-                // been partly examined, not cleared.
-                indeterminate_rules: event.indeterminateRules,
-                behavioural: event.behavioural,
-                versions: {
-                    model: event.modelVersion,
-                    rule_set: event.ruleSetVersion,
-                    features: event.featureSetVersion,
-                },
-                scored_at: event.scoredAt,
-                already_dispositioned: decided.has(String(event.donationId)),
-            })),
+            data: {
+                // The budget the queue was cut to, stated. A list of fifty is
+                // otherwise indistinguishable from there being fifty items,
+                // and the difference is the whole basis of precision@B.
+                budget,
+                returned: events.length,
+                bounded_by_budget: events.length >= limit,
+                filters: filters.applied,
+                items: events.map((event) => ({
+                    donation: byId.get(String(event.donationId)) || null,
+                    legal_findings: event.legalFindings,
+                    // Rules that could not be evaluated travel with the item. A
+                    // donation with no findings and several unevaluated rules has
+                    // been partly examined, not cleared.
+                    indeterminate_rules: event.indeterminateRules,
+                    behavioural: event.behavioural,
+                    versions: {
+                        model: event.modelVersion,
+                        rule_set: event.ruleSetVersion,
+                        features: event.featureSetVersion,
+                    },
+                    scored_at: event.scoredAt,
+                    already_dispositioned: decided.has(String(event.donationId)),
+                })),
+            },
         });
     } catch (err) {
-        console.error('Error building queue:', err);
-        return fail(res, 400, process.env.DEBUG ? err.message : 'Bad Request');
+        return serverError(res, err, 'Error building queue');
     }
 };
+
+/**
+ * How many items the queue returns.
+ *
+ * Defaults to the configured review budget rather than to a round number. The
+ * budget is how many donations a team can actually process in a period, and a
+ * queue longer than it is a queue whose tail nobody reaches — which makes every
+ * precision figure computed over it describe an operating point that does not
+ * exist.
+ */
+function queueBudget(query) {
+    const configured = Number.parseInt(process.env.REVIEW_BUDGET, 10) || 50;
+    const requested = Number.parseInt(query.limit, 10);
+    return {
+        budget: configured,
+        limit: Math.min(requested || configured, 500),
+    };
+}
+
+/**
+ * Queue filters, split by which collection they constrain.
+ *
+ * `district` is served through the electoral context, which is where DR-01 puts
+ * it. Adding a separate district column that nothing else populates would give
+ * the filter something to match and the rest of the system nothing to fill in.
+ */
+function queueFilters(query) {
+    const event = {};
+    const donation = {};
+    const applied = {};
+
+    if (query.tier === '1') {
+        event.hasFinding = true;
+        applied.tier = 'statutory findings only';
+    } else if (query.tier === '2') {
+        event.hasFinding = false;
+        applied.tier = 'behavioural only, no statutory finding';
+    }
+
+    if (query.lane) {
+        // A lane fired if it contributed anything. Filtering on the reason
+        // codes instead would miss a lane that ran and found nothing, which is
+        // a different state from a lane that did not run.
+        event['behavioural.lanes'] = {
+            $elemMatch: { lane: query.lane, available: true, contribution: { $gt: 0 } },
+        };
+        applied.lane = query.lane;
+    }
+
+    if (query.band) {
+        event['behavioural.band'] = query.band;
+        applied.band = query.band;
+    }
+
+    if (query.min_score) {
+        event.score = { $gte: Number.parseInt(query.min_score, 10) };
+        applied.min_score = Number.parseInt(query.min_score, 10);
+    }
+
+    if (query.electoral_context || query.district) {
+        donation.electoralContext = query.electoral_context || query.district;
+        applied.electoral_context = donation.electoralContext;
+    }
+
+    if (query.recipient) {
+        donation['receiverRef.entityId'] = query.recipient;
+        applied.recipient = query.recipient;
+    }
+
+    if (query.from || query.to) {
+        donation.occurredAt = {};
+        if (query.from) donation.occurredAt.$gte = new Date(query.from);
+        if (query.to) donation.occurredAt.$lte = new Date(query.to);
+        applied.period = { from: query.from || null, to: query.to || null };
+    }
+
+    return { event, donation, applied };
+}
+
+/**
+ * Clear a set of donations that share one cause.
+ *
+ * The recorded reason is the point. A hundred donations cleared one at a time
+ * are a hundred unrelated judgements; the same hundred cleared together with
+ * "recurring monthly transfer from a registered party branch" is one
+ * diagnosable signal that something in the detection is systematically wrong.
+ */
+const bulkClear = async (req, res) => {
+    try {
+        const { donation_ids: donationIds, reason, typology, value } = req.body || {};
+
+        if (!Array.isArray(donationIds) || donationIds.length === 0) {
+            return fail(res, 400, 'donation_ids must be a non-empty array');
+        }
+        if (!reason) {
+            return fail(
+                res,
+                400,
+                'reason is required: clearing a set without recording what they have ' +
+                    'in common loses the only thing that makes the set useful',
+            );
+        }
+        const labelValue = value || 'not_risky';
+        if (!LABEL_VALUES.includes(labelValue)) {
+            return fail(res, 400, `value must be one of: ${LABEL_VALUES.join(', ')}`);
+        }
+        const actor = req.user?.email || null;
+        if (!actor) return fail(res, 400, 'a disposition must name the person making it');
+
+        const donations = await Donation.find({ _id: { $in: donationIds } }).lean();
+        const found = new Set(donations.map((d) => String(d._id)));
+        const missing = donationIds.filter((id) => !found.has(String(id)));
+
+        const bulkId = new mongoose.Types.ObjectId();
+        const created = [];
+        for (const donation of donations) {
+            const previous = await Label.findOne({
+                donationId: donation._id,
+                source: 'analyst_disposition',
+                supersededBy: null,
+            }).sort({ createdAt: -1 });
+
+            const label = await Label.create({
+                donationId: donation._id,
+                donationVersion: donation.donationVersion || 1,
+                value: labelValue,
+                source: 'analyst_disposition',
+                typology: typology || null,
+                weight: SOURCE_WEIGHTS.analyst_disposition,
+                actor,
+                note: reason,
+                bulkId,
+            });
+            if (previous) {
+                await Label.updateOne({ _id: previous._id }, { supersededBy: label._id });
+            }
+            created.push(String(label._id));
+        }
+
+        await record({
+            actor,
+            action: 'bulk-clear',
+            subjectType: 'Donation',
+            subjectId: donations.map((d) => String(d._id)).join(','),
+            reason,
+        });
+
+        return res.status(200).json({
+            status: 'success',
+            message: `Recorded ${created.length} disposition(s) sharing one reason`,
+            data: {
+                bulk_id: String(bulkId),
+                labels: created,
+                // Named rather than counted, so a caller can see which ids did
+                // not exist instead of inferring it from a total.
+                not_found: missing,
+            },
+        });
+    } catch (err) {
+        return serverError(res, err, 'Error clearing donations in bulk');
+    }
+};
+
+/**
+ * A failure on our side is a 5xx.
+ *
+ * Returning 400 for a database fault reports a service error as the caller's
+ * mistake, which hides it from monitoring and from anyone counting client
+ * errors.
+ */
+function serverError(res, err, context) {
+    console.error(`${context}:`, err);
+    return res.status(500).json({
+        status: 'error',
+        message: process.env.DEBUG ? err.message : 'Internal Server Error',
+        data: {},
+    });
+}
 
 module.exports = {
     confirmAsSender,
@@ -268,5 +478,8 @@ module.exports = {
     disposition,
     disputeOutcome,
     queue,
+    bulkClear,
+    queueFilters,
+    queueBudget,
     SOURCE_WEIGHTS,
 };

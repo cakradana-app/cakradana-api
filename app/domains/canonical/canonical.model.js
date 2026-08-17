@@ -185,6 +185,11 @@ const labelSchema = new mongoose.Schema(
         weight: { type: Number, min: 0, max: 1, required: true },
         actor: { type: String, default: null },
         note: { type: String, default: null },
+        // Set when this label was one of a set cleared together for a shared
+        // reason. A hundred donations cleared individually are a hundred
+        // unrelated judgements; the same hundred sharing an id are one signal
+        // that something in the detection is systematically wrong.
+        bulkId: { type: mongoose.Schema.Types.ObjectId, default: null },
         // Later labels supersede earlier ones without deleting them, so a
         // disposition history stays reconstructible.
         supersededBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Label', default: null },
@@ -194,6 +199,7 @@ const labelSchema = new mongoose.Schema(
 
 labelSchema.index({ donationId: 1, createdAt: -1 });
 labelSchema.index({ source: 1 });
+labelSchema.index({ bulkId: 1 });
 
 /**
  * A recipient confirming a donation establishes that the transaction

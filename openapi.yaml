@@ -840,7 +840,203 @@ paths:
         Each item carries the rules that could not be evaluated. A donation with
         no findings and several unevaluated rules has been partly examined, not
         cleared.
+        The queue is cut to the configured review budget — how many donations a
+        team can process in a period — and reports it. A page of fifty is
+        otherwise indistinguishable from a queue of fifty, and the difference is
+        the whole basis of a precision-at-budget figure.
       parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            maximum: 500
+          description: Defaults to the configured review budget
+        - name: tier
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ['1', '2']
+          description: |
+            `1` selects donations carrying a statutory finding; `2` selects
+            those with none. A donation that breaches a limit is a legal matter
+            first, so it does not appear in the behavioural queue where the fact
+            would be buried under the estimate.
+        - name: lane
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [classifier, graph, anomaly, reputation]
+          description: Lanes that ran and contributed, not lanes that were configured
+        - name: band
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [low, moderate, high, critical]
+        - name: min_score
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: electoral_context
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: district
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Served through the electoral context, which is where the data model holds it
+        - name: recipient
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Review queue, with the budget it was cut to
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/donations/bulk-clear:
+    post:
+      tags:
+        - Donation Management
+      summary: Clear a set of donations sharing one cause
+      description: |
+        The recorded reason is the point. A hundred donations cleared one at a
+        time are a hundred unrelated judgements; the same hundred cleared
+        together with "recurring monthly transfer from a registered party
+        branch" is one diagnosable signal that something in the detection is
+        systematically wrong.
+
+        The labels share a bulk id so the set stays recoverable afterwards.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkClearRequest'
+      responses:
+        '200':
+          description: Dispositions recorded, with any ids that did not exist named
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Missing reason, empty set, or no person identified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/donations/case/{donationId}:
+    get:
+      tags:
+        - Donation Management
+      summary: Everything needed to judge one donation
+      description: |
+        A review step that shows a score and an approve button is automation
+        with a signature attached: there is nothing to review, only a number to
+        agree with.
+
+        This assembles the evidence before anyone is asked to decide — the
+        parties and how firmly each identity is held, the provenance of every
+        field with the text quoted from its source, the statutory findings and
+        the rules that could not be evaluated, the behavioural reasons, the
+        neighbourhood the donation sits in, comparable donations against which a
+        figure becomes readable, and everything anyone has already said about
+        it.
+
+        Both the neighbourhood and the comparables are bounded, and both report
+        their bounds. A neighbourhood silently showing fifty of four hundred
+        flows would let an analyst conclude a donor is peripheral when they are
+        central.
+      parameters:
+        - name: donationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Case detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such donation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/quarantine:
+    get:
+      tags:
+        - Quarantine
+      summary: Records that could not be admitted
+      description: |
+        Quarantine only earns its place if somebody empties it. A record set
+        aside with a reason and never looked at again is data loss with better
+        bookkeeping — the donation is as absent from every total as if it had
+        been dropped.
+
+        Oldest first, because quarantine has a retention period and working
+        newest-first would let the tail expire unread. Each item reports how
+        many days remain before it is deleted.
+      parameters:
+        - name: resolved
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ['true', 'false', all]
+        - name: channel
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [digital-form, paper-form, web-scrape, import]
         - name: limit
           in: query
           required: false
@@ -850,13 +1046,124 @@ paths:
             maximum: 200
       responses:
         '200':
-          description: Review queue
+          description: Quarantined records
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
         '401':
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/quarantine/resubmit:
+    post:
+      tags:
+        - Quarantine
+      summary: Correct a quarantined record and re-ingest it
+      description: |
+        The corrected payload runs through the same validation that rejected it.
+        A correction that does not actually fix the problem is quarantined again
+        with the new reason, rather than admitted because a person vouched for
+        it.
+
+        Corrected fields are marked as human-corrected provenance on the way
+        through: a value somebody typed is a different kind of evidence from a
+        value read out of a document, and the difference has to survive into the
+        record.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quarantine_id, payload]
+              properties:
+                quarantine_id:
+                  type: string
+                payload:
+                  type: object
+                  description: The corrected record, in the same shape ingestion accepts
+                note:
+                  type: string
+                  nullable: true
+      responses:
+        '200':
+          description: Corrected record admitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such quarantined record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Already resolved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: The corrected record still cannot be admitted, with the reason
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/quarantine/dismiss:
+    post:
+      tags:
+        - Quarantine
+      summary: Close a quarantined record without admitting it
+      description: |
+        For records that are genuinely not donations — a page header the
+        extractor mistook for a row, a duplicate of something already held. The
+        reason is required: a record closed with no explanation is
+        indistinguishable from one dismissed because it was inconvenient.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quarantine_id, reason]
+              properties:
+                quarantine_id:
+                  type: string
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Dismissed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Missing reason, or no person identified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such quarantined record
           content:
             application/json:
               schema:
@@ -1465,6 +1772,30 @@ components:
             subject who knows an attribution is wrong is not obliged to know
             what the right answer is.
 
+    BulkClearRequest:
+      type: object
+      required:
+        - donation_ids
+        - reason
+      properties:
+        donation_ids:
+          type: array
+          items:
+            type: string
+        reason:
+          type: string
+          description: |
+            What the set has in common. Required: clearing donations together
+            without recording why loses the only thing that makes the set more
+            informative than the individual judgements.
+        value:
+          type: string
+          enum: [risky, not_risky, indeterminate]
+          default: not_risky
+        typology:
+          type: string
+          nullable: true
+
     NotificationDecisionRequest:
       type: object
       required:
@@ -1862,6 +2193,10 @@ tags:
     description: Web scraping and AI-powered donation data extraction
   - name: Donation Management
     description: Donation and entity data retrieval and management
+  - name: Quarantine
+    description: |
+      Records that could not be admitted, and the work of correcting them.
+      Quarantine only earns its place if somebody empties it.
   - name: Notifications
     description: |
       Deciding whether to tell a subject that a donation attributed to them has
