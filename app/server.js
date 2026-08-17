@@ -38,6 +38,13 @@ app.use(express.static(path.join(__dirname, 'templates')));
 const healthRouter = require('./domains/health/health.router');
 app.use('/', healthRouter);
 
+// The published dataset. Mounted outside /service and unauthenticated: it is a
+// different product surface with a different audience, and its separation from
+// the operational routes is part of what keeps it from serving operational
+// data.
+const publicRouter = require('./domains/public/public.router');
+app.use('/public', publicRouter);
+
 const userRouter = require('./domains/users/user.router');
 app.use('/user', userRouter);
 

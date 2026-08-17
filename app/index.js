@@ -6,6 +6,7 @@ mongodb.connectDB();
 const app = require('./server');
 const retention = require('./domains/canonical/retention.scheduler');
 const sweeper = require('./utils/scoring/sweeper');
+const publicDataset = require('./domains/public/public.scheduler');
 const jobs = require('./domains/services/jobs/job.controller');
 const { log } = require('./utils/observability/logging');
 
@@ -24,6 +25,10 @@ retention.start();
 // picks up what was left outstanding. Without the sweep, a donation nothing
 // evaluated is indistinguishable from one evaluated and found clean.
 sweeper.start();
+
+// The published dataset is rebuilt on a schedule rather than derived per
+// request. A query-time path is one filter bug away from publishing scores.
+publicDataset.start();
 
 // A job still claiming to be running days after the process that owned it died
 // invites waiting; one that admits it was interrupted invites re-uploading.
