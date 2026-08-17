@@ -34,7 +34,12 @@ const {
     rpoStatus,
     resilienceReport,
 } = require('../app/domains/canonical/resilience');
+const {
+    legacySingletonStatus,
+    forgetLegacySingletonStatus,
+} = require('../app/domains/canonical/resilience');
 const { Donation, Entity, Label } = require('../app/domains/canonical/canonical.model');
+const { Service } = require('../app/domains/services/services.model');
 const { AuditEntry } = require('../app/domains/canonical/retention');
 const { Dispute } = require('../app/domains/services/disputes/dispute.model');
 const { User } = require('../app/domains/users/user.model');
@@ -221,6 +226,53 @@ async function seed(uri) {
     await connection.close();
 
     return { donations, entities, senderId, receiverId };
+}
+
+/**
+ * A legacy document, with some of its rows already carried across.
+ *
+ * The state a real deployment is in partway through the migration: rows written
+ * while both stores were updated, which have a canonical counterpart, and rows
+ * written before the canonical collections existed, which do not and which
+ * exist nowhere but here.
+ */
+async function seedLegacy(uri, { rows = 2, migrated = 0 } = {}) {
+    const connection = await mongoose.createConnection(uri).asPromise();
+
+    const service = new Service({
+        entities: [{ name: 'Budi Santoso', type: 'individual' }],
+        donations: Array.from({ length: rows }, (unused, index) => ({
+            sender: 'Budi Santoso',
+            receiver: 'Partai Maju',
+            amount: 10_000_000 + index,
+            date: new Date(`2026-04-1${index}T00:00:00.000Z`),
+            type: 'digital-form',
+            senderConfirmed: index === 0,
+        })),
+    }).toObject();
+    await connection.db.collection('services').insertOne(service);
+
+    // The link the backfill writes. Its presence is what makes a legacy row
+    // derived rather than the only copy.
+    const carried = service.donations.slice(0, migrated).map((row) =>
+        new Donation({
+            senderRef: { rawText: 'Budi Santoso', entityType: 'individual' },
+            receiverRef: { rawText: 'Partai Maju', entityType: 'political-party' },
+            amountIdr: row.amount,
+            occurredAt: row.date,
+            recordedAt: row.date,
+            channel: 'import',
+            dedupKey: `carried-${row._id}`,
+            legacyDonationId: row._id,
+        }).toObject(),
+    );
+    if (carried.length > 0) {
+        await connection.db.collection('donations').insertMany(carried);
+    }
+
+    await connection.close();
+    forgetLegacySingletonStatus();
+    return service;
 }
 
 async function countIn(uri, collection) {
@@ -581,6 +633,117 @@ test('pruning removes nothing when pointed at a directory of things it did not w
 
     assert.deepEqual(removed, []);
     assert.deepEqual(fs.readdirSync(out).sort(), ['holiday-photos', 'notes.txt']);
+});
+
+test('a backup taken while the legacy document holds the only copy of a donation contains it', async () => {
+    // The scenario this covers loses data in silence rather than failing.
+    // Ingestion no longer writes the legacy document, which makes it look
+    // derived — and it is, for every row written while both stores were
+    // updated. It is not derived for the rows written before the canonical
+    // collections existed. Omit it from the archive and a restore drops those
+    // donations; run the backfill afterwards and it finds an empty document and
+    // reports "nothing to move", which reads as success.
+    const source = await newStore();
+    const target = await newStore();
+    const out = newWorkspace();
+
+    const legacy = await seedLegacy(source, { rows: 3, migrated: 1 });
+    const onlyCopy = legacy.donations[2];
+
+    const { archive, manifest } = await backup({ uri: source, log: quiet, out });
+
+    const services = manifest.collections.find((entry) => entry.collection === 'services');
+    assert.ok(services, 'the legacy document is not in the backup set');
+    assert.equal(services.documents, 1);
+
+    await restore({ from: archive, uri: target, log: quiet });
+
+    const connection = await mongoose.createConnection(target).asPromise();
+    const restored = await connection.db.collection('services').findOne({});
+    await connection.close();
+
+    assert.equal(restored.donations.length, 3);
+    const recovered = restored.donations.find(
+        (row) => String(row._id) === String(onlyCopy._id),
+    );
+    assert.ok(recovered, 'the row that existed nowhere else did not survive the restore');
+    assert.equal(recovered.amount, onlyCopy.amount);
+    assert.equal(recovered.date.getTime(), onlyCopy.date.getTime());
+});
+
+test('the legacy document is reported as load-bearing while any row exists nowhere else', async () => {
+    const uri = await newStore();
+    await seedLegacy(uri, { rows: 3, migrated: 1 });
+
+    await mongoose.connect(uri);
+    try {
+        const status = await legacySingletonStatus({ maxAgeMs: 0 });
+        assert.equal(status.state, 'load-bearing');
+        assert.equal(status.held, 3);
+        assert.equal(status.migrated, 1);
+        assert.equal(status.legacyOnly, 2);
+        // The remedy travels with the number: knowing two rows are at risk is
+        // only actionable alongside what to run about it.
+        assert.match(status.because, /backfill/);
+
+        const report = await resilienceReport();
+        assert.equal(report.legacySingleton.state, 'load-bearing');
+        assert.equal(report.legacySingleton.legacyOnly, 2);
+        assert.ok(
+            report.backupSet.some((entry) => entry.collection === 'services'),
+            'the legacy document is not in the reported backup set',
+        );
+    } finally {
+        await mongoose.disconnect();
+    }
+});
+
+test('a store whose backfill has run reports the legacy document as derived', async () => {
+    // Measured rather than assumed in either direction. Zero is what says the
+    // document could be dropped from the backup set later; it is not something
+    // the code may decide on its own.
+    const uri = await newStore();
+    await seedLegacy(uri, { rows: 2, migrated: 2 });
+
+    await mongoose.connect(uri);
+    try {
+        const status = await legacySingletonStatus({ maxAgeMs: 0 });
+        assert.equal(status.state, 'derived');
+        assert.equal(status.legacyOnly, 0);
+        assert.equal(status.migrated, 2);
+    } finally {
+        await mongoose.disconnect();
+    }
+});
+
+test('a deployment that never had a legacy document says so, rather than reporting zero rows at risk', async () => {
+    const uri = await newStore();
+    forgetLegacySingletonStatus();
+
+    await mongoose.connect(uri);
+    try {
+        const status = await legacySingletonStatus({ maxAgeMs: 0 });
+        assert.equal(status.state, 'absent');
+        assert.equal(status.held, 0);
+        assert.equal(status.legacyOnly, 0);
+    } finally {
+        await mongoose.disconnect();
+    }
+});
+
+test('how much of the legacy document exists nowhere else is a metric', async () => {
+    const uri = await newStore();
+    await seedLegacy(uri, { rows: 4, migrated: 1 });
+
+    await mongoose.connect(uri);
+    try {
+        const scraped = await metrics.render();
+        assert.match(scraped, /cakradana_legacy_donations_total 4/);
+        assert.match(scraped, /cakradana_legacy_only_donations 3/);
+        assert.match(scraped, /# HELP cakradana_legacy_only_donations /);
+    } finally {
+        await mongoose.disconnect();
+    }
 });
 
 test('the declared objectives are scrapeable without reading the store', () => {

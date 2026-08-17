@@ -157,6 +157,19 @@ const BACKUP_SET = Object.freeze([
             'was acted on',
     }),
     Object.freeze({
+        collection: 'services',
+        model: () => require('../services/services.model').Service,
+        because:
+            'the legacy document, which holds donations that exist nowhere else until ' +
+            'scripts/backfill-canonical.js has been run against this deployment. ' +
+            'Ingestion no longer writes it, which makes it look derived; the rows ' +
+            'written before the canonical collections existed were never copied ' +
+            'anywhere, so for those it is the only copy. Excluding it would lose them ' +
+            'in a restore and the backfill afterwards would report "nothing to move", ' +
+            'which reads as success. `legacySingletonStatus` measures whether that is ' +
+            'still true rather than assuming either answer',
+    }),
+    Object.freeze({
         collection: 'auditentries',
         model: () => require('./retention').AuditEntry,
         because:
@@ -196,13 +209,6 @@ const NOT_BACKED_UP = Object.freeze([
             'published view of data that may itself have been corrected in the meantime',
     }),
     Object.freeze({
-        collection: 'services',
-        because:
-            'the legacy singleton, which ingestion dual-writes from the canonical ' +
-            'records. It is derivable from what is backed up; the canonical records ' +
-            'are not derivable from it',
-    }),
-    Object.freeze({
         collection: 'jobs',
         because:
             'progress handles for uploads in flight. A job restored into a new ' +
@@ -221,12 +227,14 @@ const NOT_BACKED_UP = Object.freeze([
  * The shape an archive is expected to restore into.
  *
  * Bumped by hand when a canonical schema changes such that an older archive
- * would no longer restore into a usable store. Because a version somebody has
- * to remember to bump is a version that will be wrong at least once, the
- * manifest also records a fingerprint computed from the schemas themselves, so
- * a restore can report drift the constant did not.
+ * would no longer restore into a usable store, and when the backup set itself
+ * changes — an archive taken before a collection was added does not contain it,
+ * and a restore that says so is better than one that silently omits it. Because
+ * a version somebody has to remember to bump is a version that will be wrong at
+ * least once, the manifest also records a fingerprint computed from the schemas
+ * themselves, so a restore can report drift the constant did not.
  */
-const SCHEMA_VERSION = '2026.08.1';
+const SCHEMA_VERSION = '2026.08.2';
 
 /**
  * A digest over the declared field paths of every backed-up collection.
@@ -337,6 +345,109 @@ async function rpoStatus({ now = new Date() } = {}) {
 }
 
 /**
+ * Whether the legacy document still holds anything that exists nowhere else.
+ *
+ * Ingestion stopped writing it, which makes it look derived — and it is, for
+ * every row written while both stores were being updated. It is not derived for
+ * the rows written before the canonical collections existed: those were never
+ * copied anywhere, and `scripts/backfill-canonical.js` is what moves them.
+ * Until that has run against a deployment, the legacy document is the only copy
+ * of those donations.
+ *
+ * That distinction cannot be assumed either way, because getting it wrong in
+ * the safe-sounding direction loses data in silence: a restore from an archive
+ * that skipped the singleton drops those donations, and a backfill run
+ * afterwards finds an empty document and reports "nothing to move", which reads
+ * as success. So it is measured. Zero legacy-only rows means the document
+ * really is derived and could be dropped from the backup set; anything above
+ * zero means it is load-bearing and must not be.
+ *
+ * "Legacy-only" is defined the way the backfill defines it: a row in the
+ * document whose `_id` appears in no `Donation.legacyDonationId`.
+ */
+const LEGACY_SINGLETON_CACHE_MS = 5 * 60 * 1000;
+let legacyStatusCache = null;
+
+async function legacySingletonStatus({ maxAgeMs = LEGACY_SINGLETON_CACHE_MS } = {}) {
+    if (legacyStatusCache && Date.now() - legacyStatusCache.at < maxAgeMs) {
+        return { ...legacyStatusCache.value, cached: true };
+    }
+
+    let value;
+    try {
+        const { Service } = require('../services/services.model');
+        const { Donation } = require('./canonical.model');
+
+        // Projected to the ids alone. The document this reads can approach
+        // MongoDB's sixteen-megabyte limit — that ceiling is why it is being
+        // retired — so the answer is cached rather than recomputed on every
+        // metrics scrape. It changes only when a backfill runs.
+        const document = await Service.findOne().select('donations._id').lean();
+        if (!document) {
+            value = {
+                state: 'absent',
+                held: 0,
+                migrated: 0,
+                legacyOnly: 0,
+                because:
+                    'this deployment has no legacy document, so the collection is ' +
+                    'backed up empty and nothing depends on it',
+            };
+        } else {
+            const rows = document.donations || [];
+            const migratedIds = new Set(
+                (
+                    await Donation.find({ legacyDonationId: { $ne: null } })
+                        .select('legacyDonationId')
+                        .lean()
+                ).map((donation) => String(donation.legacyDonationId)),
+            );
+            const legacyOnly = rows.filter(
+                (row) => !migratedIds.has(String(row._id)),
+            ).length;
+
+            value = {
+                state: legacyOnly > 0 ? 'load-bearing' : 'derived',
+                held: rows.length,
+                migrated: rows.length - legacyOnly,
+                legacyOnly,
+                because:
+                    legacyOnly > 0
+                        ? `${legacyOnly} of ${rows.length} rows in the legacy document have no ` +
+                          'canonical counterpart and exist nowhere else. Run ' +
+                          '`npm run backfill -- --apply` to move them; until then the ' +
+                          'legacy collection is load-bearing and a backup that omitted it ' +
+                          'would lose those donations'
+                        : 'every row in the legacy document has a canonical counterpart, so ' +
+                          'the document is derived. It stays in the backup set until it is ' +
+                          'dropped from the deployment, because a row arriving in it later ' +
+                          'would otherwise be unprotected',
+            };
+        }
+    } catch (error) {
+        // Not zero. A count that could not be read and a count that is zero
+        // lead to opposite decisions about whether the singleton can be
+        // dropped from the backup set.
+        return {
+            state: 'unknown',
+            held: null,
+            migrated: null,
+            legacyOnly: null,
+            because: `the legacy document could not be read: ${error.message}`,
+            cached: false,
+        };
+    }
+
+    legacyStatusCache = { at: Date.now(), value };
+    return { ...value, cached: false };
+}
+
+/** Forget the cached reading. For tests, and for a caller that has just run a backfill. */
+function forgetLegacySingletonStatus() {
+    legacyStatusCache = null;
+}
+
+/**
  * The objectives and the current position against them, in one object.
  *
  * Serves the monitoring endpoint and the readiness probe. It carries the stated
@@ -352,6 +463,10 @@ async function resilienceReport({ now = new Date() } = {}) {
         backupSet: BACKUP_SET.map(({ collection, because }) => ({ collection, because })),
         notBackedUp: NOT_BACKED_UP,
         rpo: await rpoStatus({ now }),
+        // Measured, never assumed. Whether the legacy document is a second copy
+        // or the only copy decides whether omitting it from a backup loses
+        // donations, and the answer changes when a backfill runs.
+        legacySingleton: await legacySingletonStatus({ maxAgeMs: 0 }),
         // Said plainly, because the gap between "we have backups" and "we can
         // recover" is where recovery plans usually fail.
         notCovered: [
@@ -373,5 +488,7 @@ module.exports = {
     schemaFingerprint,
     lastSuccessfulBackup,
     rpoStatus,
+    legacySingletonStatus,
+    forgetLegacySingletonStatus,
     resilienceReport,
 };

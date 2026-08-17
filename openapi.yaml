@@ -1422,6 +1422,14 @@ paths:
         gap between "there are backups" and "we can recover" is where recovery
         plans usually fail, and leaving it unmentioned does not close it.
 
+        `legacySingleton` reports how much of the legacy document exists nowhere
+        else — rows written before the canonical collections existed, which the
+        backfill has not yet moved. Above zero it is the only copy of those
+        donations, so a backup that omitted it would lose them and a backfill run
+        afterwards would find an empty document and report "nothing to move".
+        Measured rather than assumed, because both answers are wrong at
+        different times.
+
         Carries no donation content.
       responses:
         '200':

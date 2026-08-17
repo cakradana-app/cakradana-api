@@ -85,7 +85,10 @@ async function storeGauges() {
         // is not the same as being met. The age is what an alert should watch;
         // `ever_completed` separates a schedule that slipped from one that was
         // never created, and those are different failures.
-        const { rpoStatus } = require('../../domains/canonical/resilience');
+        const {
+            rpoStatus,
+            legacySingletonStatus,
+        } = require('../../domains/canonical/resilience');
         const rpo = await rpoStatus();
         gauges.cakradana_backup_ever_completed = rpo.lastBackupAt ? 1 : 0;
         if (rpo.lastBackupAt) {
@@ -95,6 +98,17 @@ async function storeGauges() {
                 0,
                 Math.floor((Date.now() - completed) / 1000),
             );
+        }
+
+        // How much of the legacy document still exists nowhere else. It falls
+        // to zero when the backfill has run, and while it is above zero a
+        // backup that omitted that collection would lose those donations
+        // without anything reporting it. Cached inside, because the document
+        // it reads can approach sixteen megabytes.
+        const legacy = await legacySingletonStatus();
+        if (legacy.legacyOnly !== null) {
+            gauges.cakradana_legacy_donations_total = legacy.held;
+            gauges.cakradana_legacy_only_donations = legacy.legacyOnly;
         }
     } catch (error) {
         // Reported as its own metric rather than as an empty response, so a
@@ -140,6 +154,9 @@ const HELP = Object.freeze({
     cakradana_availability_objective_ratio: 'Declared availability target for the ingestion write path',
     cakradana_rpo_objective_seconds: 'Declared recovery point objective',
     cakradana_rto_objective_seconds: 'Declared recovery time objective',
+    cakradana_legacy_donations_total: 'Donation rows held in the legacy document',
+    cakradana_legacy_only_donations:
+        'Legacy rows with no canonical counterpart; above zero the legacy collection is the only copy',
     cakradana_requests_total: 'HTTP requests by method, route, and status',
     cakradana_scoring_requests_total: 'Calls to the scoring service by outcome',
     cakradana_extraction_records_total: 'Extracted records by outcome',
