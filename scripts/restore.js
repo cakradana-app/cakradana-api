@@ -34,7 +34,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const mongoose = require('mongoose');
 
-const { BACKUP_RUN_COLLECTION, SCHEMA_VERSION, schemaFingerprint } = require('../app/domains/canonical/resilience');
+const {
+    BACKUP_SET,
+    BACKUP_RUN_COLLECTION,
+    SCHEMA_VERSION,
+    schemaFingerprint,
+} = require('../app/domains/canonical/resilience');
 const {
     MANIFEST_FORMAT,
     collectionDigest,
@@ -206,6 +211,28 @@ async function restore({
         );
     }
 
+    // What this code would back up and this archive does not contain. An
+    // archive taken before a collection joined the backup set restores
+    // faithfully and verifiably without it, and reports success — because the
+    // manifest is the authority on what should be here, and the manifest
+    // predates the decision. The collections come back empty, and empty is
+    // indistinguishable from a store that held nothing.
+    //
+    // Not a refusal. An old archive is exactly what a real recovery reaches
+    // for. But the operator is told which collections are absent by omission
+    // rather than left to notice later that the case files never came back.
+    const archived = new Set(manifest.collections.map((entry) => entry.collection));
+    const absent = BACKUP_SET.map((entry) => entry.collection).filter(
+        (collection) => !archived.has(collection),
+    );
+    if (absent.length > 0) {
+        log(
+            `warning: this archive predates ${absent.join(', ')} being backed up. ` +
+            'Those collections are not in it and will be empty after this restore, ' +
+            'which is not the same as their having held nothing',
+        );
+    }
+
     const connection = await mongoose.createConnection(uri).asPromise();
 
     try {
@@ -274,7 +301,7 @@ async function restore({
             'restore has reinstated records that sweep deleted.',
         );
 
-        return { manifest, verified, schemaDrifted };
+        return { manifest, verified, schemaDrifted, absentCollections: absent };
     } finally {
         await connection.close();
     }

@@ -435,6 +435,42 @@ test('the drill: seeded data survives a backup and a restore into a clean databa
     assert.equal(emptyOnBothSides, 0);
 });
 
+test('a restore names the collections its archive predates', async () => {
+    // The trap in every backup-set change, including the three I made: an
+    // archive taken before a collection joined the set restores faithfully,
+    // verifies against its own manifest, and reports success — with that
+    // collection empty. The manifest is the authority on what should be there
+    // and the manifest predates the decision, so the verification cannot catch
+    // it. Empty then reads as a store that held nothing.
+    const source = await newStore();
+    const target = await newStore();
+    const out = newWorkspace();
+
+    await seed(source);
+    const { archive } = await backup({ uri: source, out, log: quiet });
+
+    // An archive from before `cases` was backed up.
+    const manifestPath = path.join(archive, 'manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.collections = manifest.collections.filter(
+        (entry) => entry.collection !== 'cases',
+    );
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 4));
+
+    const said = [];
+    const report = await restore({
+        from: archive,
+        uri: target,
+        log: (line) => said.push(line),
+    });
+
+    // It still restores — an old archive is what a real recovery reaches for —
+    // and it says which collections are not in it.
+    assert.deepEqual(report.absentCollections, ['cases']);
+    assert.match(said.join('\n'), /predates cases being backed up/);
+    assert.match(said.join('\n'), /not the same as their having held nothing/);
+});
+
 test('a restore into a store that already holds data is refused', async () => {
     const source = await newStore();
     const target = await newStore();
