@@ -181,15 +181,45 @@ test('the same document arriving twice is not corroboration', () => {
     );
 });
 
-test('a document we have not seen corroborates, whatever channel it came through', () => {
-    // Two different filed returns describing the same donation are two
-    // sources, even though both arrive as scrapes.
+test('a new document on a channel already counted does not corroborate', () => {
+    // The defect this replaces: the check returned on the reference alone
+    // whenever one was present, and the digital-form channel takes
+    // `sourceReference` verbatim from the request body. One caller resubmitting
+    // the same donation with a fresh reference string each time was judged
+    // independent every time, and the case bundle told the reviewer the
+    // donation had four sources.
+    //
+    // The cost is stated rather than hidden: two genuinely different filed
+    // returns scraped from the same site now count once. Under-counting real
+    // corroboration weakens a signal; over-counting it manufactures evidence.
     assert.equal(
         isIndependentSource(held(), {
             channel: 'web-scrape',
             sourceReference: 'https://kpu.go.id/lppdk/456',
         }),
-        true,
+        false,
+    );
+});
+
+test('a caller cannot manufacture sources by varying the reference', () => {
+    let record = held({ channel: 'digital-form', sourceDocument: { reference: 'r1' } });
+    for (const reference of ['r2', 'r3', 'r4']) {
+        assert.equal(
+            isIndependentSource(record, { channel: 'digital-form', sourceReference: reference }),
+            false,
+            `reference ${reference} should not count as a second source`,
+        );
+    }
+});
+
+test('one upload does not corroborate itself across its own pages', () => {
+    // Every page of a scan carries its own filename but arrives through one
+    // channel in one act of reporting. A summary page repeating a line item
+    // would otherwise be reported as a second independent source.
+    const record = held({ channel: 'paper-form', sourceDocument: { reference: 'page1.jpg' } });
+    assert.equal(
+        isIndependentSource(record, { channel: 'paper-form', sourceReference: 'page2.jpg' }),
+        false,
     );
 });
 
@@ -220,10 +250,28 @@ test('a channel already counted through corroboration does not count again', () 
     assert.equal(isIndependentSource(record, { channel: 'digital-form' }), false);
 });
 
-test('a record with no source document is corroborated by the first reference', () => {
+test('a record with no source document is still bounded by its channel', () => {
     const record = held({ sourceDocument: null, channel: 'import' });
     assert.equal(
         isIndependentSource(record, { channel: 'import', sourceReference: 'batch-1' }),
+        false,
+    );
+    assert.equal(
+        isIndependentSource(record, { channel: 'paper-form', sourceReference: 'scan-1' }),
         true,
+    );
+});
+
+test('a channel claimed without a reference is not reopened by one with a reference', () => {
+    // The reverse of the case that was covered. Both orders have to hold, or
+    // the same channel is counted twice depending on which arrived first.
+    const record = held({
+        channel: 'web-scrape',
+        sourceDocument: null,
+        corroboration: [{ channel: 'paper-form', sourceReference: null }],
+    });
+    assert.equal(
+        isIndependentSource(record, { channel: 'paper-form', sourceReference: 'scan-9' }),
+        false,
     );
 });

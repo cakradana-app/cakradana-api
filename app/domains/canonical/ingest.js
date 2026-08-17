@@ -20,11 +20,9 @@ const crypto = require('node:crypto');
 
 const { Donation, Entity, Label, Quarantine } = require('./canonical.model');
 const { resolveEntity } = require('./resolution');
-// Required lazily inside the call rather than at module load: the review
-// controller reads the canonical models, and requiring it here closes a cycle
-// through this module.
-const raiseResolutionReview = (args) =>
-    require('../services/entities/resolution-review.controller').raise(args);
+const {
+    raise: raiseResolutionReview,
+} = require('../services/entities/resolution-review.controller');
 const { Service } = require('../services/services.model');
 const { CHANNELS, TEMPORAL_PRECISIONS } = require('../vocabulary');
 
@@ -155,6 +153,10 @@ async function ingestOne(candidate, options = {}) {
         // source manufacture its own confirmation.
         const corroborating = isIndependentSource(existing, candidate);
         if (corroborating) {
+            // Swallowed deliberately. The donation already exists and is
+            // correct; a failed corroboration note is a lost annotation, and
+            // throwing here would quarantine a record that needed nothing and
+            // send an operator to review it.
             await Donation.updateOne(
                 { _id: existing._id },
                 {
@@ -167,7 +169,9 @@ async function ingestOne(candidate, options = {}) {
                         },
                     },
                 },
-            );
+            ).catch((error) => {
+                console.error('recording corroboration failed:', error);
+            });
         }
         return {
             status: 'duplicate',
@@ -223,24 +227,46 @@ async function ingestOne(candidate, options = {}) {
     // decided, and until it is, the cumulative rules count one donor as two.
     // Raising is deliberately unable to fail the ingestion: the donation is
     // worth more than the queue entry, and the pair recurs on the next record.
-    await Promise.all([
-        raiseResolutionReview({
-            resolution: sender,
-            donationId: donation._id,
-            observedName: candidate.senderName,
-        }),
-        raiseResolutionReview({
-            resolution: receiver,
-            donationId: donation._id,
-            observedName: candidate.receiverName,
-        }),
-    ]);
+    // Wrapped here as well as inside `raise`. The guard clauses and the module
+    // resolution both sit outside that function's own try, and this runs after
+    // the donation is already persisted — an error escaping would quarantine a
+    // record that was admitted successfully.
+    try {
+        await Promise.all([
+            raiseResolutionReview({
+                resolution: sender,
+                donationId: donation._id,
+                observedName: candidate.senderName,
+                actor,
+            }),
+            raiseResolutionReview({
+                resolution: receiver,
+                donationId: donation._id,
+                observedName: candidate.receiverName,
+                actor,
+            }),
+        ]);
+    } catch (error) {
+        console.error('raising a resolution review failed:', error);
+    }
 
     return {
         status: 'ingested',
         donationId: donation._id,
         dedupKey,
-        needsEntityReview: sender.requiresReview || receiver.requiresReview,
+        // Only counts what actually reached the queue. A name that folds to
+        // nothing — "PT", "CV" — is flagged for review by the resolver but has
+        // no candidate to compare against, so no review is raised. Counting it
+        // reproduced the defect the queue was built to fix: a number on the
+        // upload response with nowhere for the work to happen.
+        needsEntityReview: Boolean(
+            (sender.requiresReview && sender.candidate) ||
+                (receiver.requiresReview && receiver.candidate),
+        ),
+        unresolvableNames: [
+            sender.basis === 'no-identifying-tokens' ? candidate.senderName : null,
+            receiver.basis === 'no-identifying-tokens' ? candidate.receiverName : null,
+        ].filter(Boolean),
         senderResolution: sender.basis,
         receiverResolution: receiver.basis,
         actor,
@@ -377,14 +403,22 @@ function candidatesFromExtraction(extraction, { channel, sourceReference = null,
  * Corroboration only means something if the sources are independent. The same
  * scraped page fetched twice, or the same scan re-uploaded, says nothing new;
  * treating it as confirmation would let one source vouch for itself, and the
- * confidence that follows would be built on a single observation counted
+ * confidence that follows would rest on a single observation counted
  * repeatedly.
  *
- * A source reference the record has not seen counts, whatever channel it came
- * through — two different filed returns describing the same donation are two
- * sources. A different channel with no reference at all counts once: a digital
- * form submission and a paper scan are not the same act of reporting, even when
- * neither carries a document identifier.
+ * Both conditions have to hold, and the earlier version checked only one. It
+ * returned on the reference alone whenever a reference was present, and the
+ * digital-form channel takes `sourceReference` verbatim from the request body
+ * — so one caller resubmitting the same donation with a different reference
+ * string each time was judged independent every time, and the case bundle told
+ * the reviewer the donation had four sources before a finding was put to the
+ * person it names.
+ *
+ * The channel is the coarse bound: one channel is one route into the system,
+ * and a second report through it is only independent if it carries a document
+ * identifier we have not seen. That does mean two filed returns scraped from
+ * the same site count once. The trade is deliberate — under-counting genuine
+ * corroboration weakens a signal, and over-counting it manufactures evidence.
  */
 function isIndependentSource(existing, candidate) {
     const reference = candidate.sourceReference || null;
@@ -394,7 +428,7 @@ function isIndependentSource(existing, candidate) {
             ...(existing.corroboration || []).map((c) => c.sourceReference || null),
         ].filter(Boolean),
     );
-    if (reference) return !seenReferences.has(reference);
+    if (reference && seenReferences.has(reference)) return false;
 
     const seenChannels = new Set([
         existing.channel,
