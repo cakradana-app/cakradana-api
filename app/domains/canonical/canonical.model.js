@@ -304,6 +304,12 @@ const QUARANTINE_SLA = Object.freeze({ reviewWithinWorkingDays: 10 });
 
 quarantineSchema.pre('validate', function setReviewDeadline(next) {
     if (!this.reviewBy) {
+        // `createdAt` is set by the timestamps plugin in a pre-save hook, which
+        // runs after this one, so on a new record it is undefined here and the
+        // clock starts now — which is the same instant. It is read anyway for
+        // the case a record is re-validated later, and for a caller that
+        // supplied one; falling through to now in that case would move the
+        // deadline every time the record was touched.
         this.reviewBy = addWorkingDays(
             this.createdAt || new Date(),
             QUARANTINE_SLA.reviewWithinWorkingDays,

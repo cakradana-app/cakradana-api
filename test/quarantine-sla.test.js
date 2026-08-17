@@ -83,3 +83,41 @@ test('an explicitly supplied deadline is not overwritten', async () => {
     await held.validate();
     assert.equal(held.reviewBy.getTime(), agreed.getTime());
 });
+
+test('the deadline is set once and does not move when the record is touched', async () => {
+    // Otherwise every re-validation would push the deadline out, and a record
+    // that is looked at repeatedly without being resolved would never be late.
+    const held = quarantined();
+    await held.validate();
+    const first = held.reviewBy.getTime();
+    held.detail = ['a note added later'];
+    await held.validate();
+    assert.equal(held.reviewBy.getTime(), first);
+});
+
+test('a new record starts its clock at creation', async () => {
+    // createdAt is set by the timestamps plugin after validation, so the hook
+    // falls through to now — which for a record being created is the same
+    // instant. Asserted so the fallback is not mistaken for a defect.
+    const before = Date.now();
+    const held = quarantined();
+    await held.validate();
+    const after = Date.now();
+
+    assert.equal(held.createdAt, undefined);
+    // Bracketed rather than compared to a single sampled instant: the clock
+    // moves between the two readings, and an exact comparison would be a test
+    // that fails whenever it happens to straddle a millisecond.
+    const earliest = addWorkingDays(
+        new Date(before),
+        QUARANTINE_SLA.reviewWithinWorkingDays,
+    ).getTime();
+    const latest = addWorkingDays(
+        new Date(after),
+        QUARANTINE_SLA.reviewWithinWorkingDays,
+    ).getTime();
+    assert.ok(
+        held.reviewBy.getTime() >= earliest && held.reviewBy.getTime() <= latest,
+        `expected the deadline between ${earliest} and ${latest}, got ${held.reviewBy.getTime()}`,
+    );
+});
