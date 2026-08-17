@@ -43,7 +43,27 @@ function periodOf(date) {
  * donor and Rp250,000,000 between Tuesday and Wednesday has disclosed one
  * person's donation to the rupiah, tied to a named recipient — which is the
  * leak the suppression threshold exists to prevent, arrived at by subtraction.
- * A closed quarter has no new donations to add.
+ *
+ * The freeze that goes with this was justified on the claim that a closed
+ * quarter's figures do not move. That claim is false for this system in
+ * particular, and the justification should not be read as one: ingestion is
+ * asynchronous by design, paper forms are OCR'd and admitted well after the
+ * fact, and `utils/scoring/sweeper.js` exists because records arrive late. The
+ * first build after a quarter closes therefore freezes whatever happened to
+ * have been ingested by then, and a recipient whose donors' forms were still
+ * being processed can be published as suppressed and stay suppressed —
+ * reporting no donors and no total for a quarter in which it received a great
+ * deal. `revisionPending` marks that cell, so it is not silent, but nothing
+ * resolves it.
+ *
+ * That is a real cost and it is not currently traded away, because the two
+ * constraints genuinely conflict: a figure that may be revised cannot be
+ * republished without the revision disclosing what changed, and a figure that
+ * may not be revised is wrong whenever the data arrives after it. A settling
+ * period between a quarter closing and its first publication would not remove
+ * the conflict but would make the frozen figures much likelier to be the
+ * complete ones. Choosing that period is a publication-policy decision rather
+ * than a technical one, and nothing here should pick a number for it.
  */
 function periodIsClosed(period, now) {
     return period < periodOf(now);
@@ -459,6 +479,15 @@ const dataset = async (req, res) => {
                 // consult and no token to consult one with, so the answer says
                 // which it is.
                 published_dataset: state,
+                // How many published cells no longer match the records behind
+                // them. Surfaced as a count rather than left to be found per
+                // cell, because it is the figure that says how often freezing
+                // on the first build after a quarter closes is costing
+                // accuracy — and in a system where records arrive late, that
+                // is the number worth watching.
+                cells_pending_revision: await PublicAggregate.countDocuments({
+                    revisionPending: true,
+                }),
                 // The fourth cause, which the state cannot express: a published
                 // dataset and no cells means the filter matched nothing, not
                 // that nothing was donated.

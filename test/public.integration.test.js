@@ -545,3 +545,26 @@ test('a published cell whose donations all vanish is frozen, not deleted', async
     assert.equal(frozen.revisionPending, true);
     assert.match(frozen.revisionNote, /no live donation now resolves/);
 });
+
+test('the endpoint says how many published figures no longer match the records', async () => {
+    // The count that says how often freezing on the first build after a
+    // quarter closes is costing accuracy. In a system where paper forms are
+    // OCR'd and admitted well after the fact, a cell can be published as
+    // suppressed and stay suppressed while the donations behind it keep
+    // arriving — marked, but never resolved. Per-cell that is easy to miss;
+    // as a count it is the figure worth watching.
+    const party = await cellWith(MIN_DONORS_PER_CELL);
+    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+    const before = await serve();
+    assert.equal(before.body.data.cells_pending_revision, 0);
+
+    const late = await makeEntity('Donor late');
+    await donate(late, party, 250_000_000, 'pending-1');
+    await controller.materialise({ now: new Date('2026-08-02T00:00:00Z') });
+
+    const after = await serve();
+    assert.equal(after.body.data.cells_pending_revision, 1);
+    // And the figure itself did not move, which is the point.
+    assert.equal(after.body.data.cells[0].donors, MIN_DONORS_PER_CELL);
+    assert.equal(after.body.data.cells[0].revision_pending, true);
+});
