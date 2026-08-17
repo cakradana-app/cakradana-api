@@ -179,6 +179,13 @@ const mint = async (req, res) => {
                 // with 200 and `created: false`, and answering it with 409
                 // instead told the operator to resolve the entity against
                 // itself: a decision with no second party to make it about.
+                if (other && String(other.entityId) === String(entity._id)) {
+                    return res.status(200).json({
+                        status: 'success',
+                        message: 'This identifier is already recorded for this entity',
+                        data: { value_ref: other.valueRef, scheme, created: false },
+                    });
+                }
                 return fail(
                     res,
                     409,

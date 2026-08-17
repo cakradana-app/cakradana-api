@@ -742,3 +742,77 @@ test('a real value is still matched', async () =>
         assert.equal(res.sent.body.data.known, true);
         assert.equal(String(res.sent.body.data.entity_id), String(entity._id));
     }));
+
+/**
+ * Losing the unique-index race to yourself.
+ *
+ * The pre-checks are a read followed by a write, so two mints of one number
+ * arriving together both see nothing and both proceed; the index decides, and
+ * the loser lands in the duplicate-key branch. That branch assumed the winner
+ * was a different entity — but the double-submit that actually happens is an
+ * operator clicking twice, or a client retrying a request whose response was
+ * lost, and both of those race the same entity against itself.
+ *
+ * The stub below removes only the pre-checks, which is exactly what losing the
+ * race removes: the queries that carry an `entityId` are the two reads that
+ * would have seen the other insert. The lookup inside the duplicate-key branch
+ * carries no `entityId` and is left alone, because it is the thing under test.
+ */
+async function whileTheRaceIsLost(run) {
+    const original = EntityIdentifier.findOne;
+    EntityIdentifier.findOne = function blind(filter, ...rest) {
+        if (filter && 'entityId' in filter) {
+            return { lean: async () => null };
+        }
+        return original.call(this, filter, ...rest);
+    };
+    try {
+        return await run();
+    } finally {
+        EntityIdentifier.findOne = original;
+    }
+}
+
+test('losing the race to the same entity answers as the unraced path does', async () =>
+    withSecrets(async () => {
+        const entity = await makeEntity();
+        const first = await mint({ entity_id: String(entity._id), scheme: 'nik', value: NIK });
+        assert.equal(first.status, 201);
+
+        const second = await whileTheRaceIsLost(() =>
+            mint({ entity_id: String(entity._id), scheme: 'nik', value: NIK }),
+        );
+
+        // The same answer the pre-check gives when it does see the existing
+        // record: already recorded, nothing created, here is the surrogate.
+        // A 409 here told the operator to resolve this entity against itself,
+        // which is a decision with no second party to make it about.
+        assert.equal(second.status, 200);
+        assert.equal(second.body.data.created, false);
+        assert.equal(second.body.data.value_ref, first.body.data.value_ref);
+
+        // And nothing was recorded twice, which is what the index was for.
+        assert.equal(
+            await EntityIdentifier.countDocuments({ scheme: 'nik', entityId: entity._id }),
+            1,
+        );
+    }));
+
+test('losing the race to a different entity is still a resolution decision', async () =>
+    withSecrets(async () => {
+        const held = await makeEntity('Holds The Number');
+        const other = await makeEntity('Also Claims It');
+        await mint({ entity_id: String(held._id), scheme: 'nik', value: NIK });
+
+        const sent = await whileTheRaceIsLost(() =>
+            mint({ entity_id: String(other._id), scheme: 'nik', value: NIK }),
+        );
+
+        assert.equal(sent.status, 409);
+        assert.equal(String(sent.body.data.other_entity_id), String(held._id));
+        assert.equal(
+            await EntityIdentifier.countDocuments({ scheme: 'nik' }),
+            1,
+            'the losing insert was recorded anyway',
+        );
+    }));
