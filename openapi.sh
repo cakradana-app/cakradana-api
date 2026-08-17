@@ -67,7 +67,28 @@ awk 'NR==6{print "  <meta name=\"robots\" content=\"none\" />"}1' app/templates/
 awk 'NR==7{print "  <meta name=\"googlebot\" content=\"none\" />"}1' app/templates/pages/index.html > temp.html && mv temp.html app/templates/pages/index.html
 sed -i '8d' app/templates/pages/index.html
 awk -v TITLE="$(sed -n '3{s/^[[:space:]]*title:[[:space:]]*//;s/[[:space:]]*$//;p;q}' openapi.yaml)" 'NR==8{print "  <title>" TITLE " - Swagger UI</title>"}1' app/templates/pages/index.html > temp.html && mv temp.html app/templates/pages/index.html
-awk -v UMAMI_ID="$(. <(tr -d '\r' < ./.env); printf %s "$UMAMI_ID")" -v API_HOST="$(. <(tr -d '\r' < ./.env); printf %s "$API_HOST")" 'NR==11{print "  <script defer src=\"https://stat.faizath.com/script.js\" data-website-id=\"" UMAMI_ID "\" data-domains=\"" API_HOST "\"></script>"}1' app/templates/pages/index.html > temp.html && mv temp.html app/templates/pages/index.html
+# The two values that reach the published page, sourced from `.env` when there
+# is one and defaulted when there is not.
+#
+# There is not one in CI, which is the job that regenerates this page and
+# compares it against the committed copy. `. ./.env` under `set -u` left both
+# variables unset, so every regeneration outside a developer's machine emptied
+# the analytics attributes and the comparison failed — on a page nobody had
+# touched. The check that exists to notice the page falling behind the spec was
+# instead reporting the absence of a file it was never given.
+#
+# Defaulted rather than required, and defaulted to what the committed page
+# already carries. Neither is a secret: both are served to every visitor of the
+# published documentation, and the site identifier is meaningless without the
+# analytics account it belongs to.
+if [ -f ./.env ]; then
+  # shellcheck disable=SC1090
+  . <(tr -d '\r' < ./.env)
+fi
+UMAMI_ID="${UMAMI_ID:-761c60f7-71a2-4681-8da2-cb30d7754a32}"
+API_HOST="${API_HOST:-cakradana-api.faizath.com}"
+
+awk -v UMAMI_ID="$UMAMI_ID" -v API_HOST="$API_HOST" 'NR==11{print "  <script defer src=\"https://stat.faizath.com/script.js\" data-website-id=\"" UMAMI_ID "\" data-domains=\"" API_HOST "\"></script>"}1' app/templates/pages/index.html > temp.html && mv temp.html app/templates/pages/index.html
 # BEGIN domain-notice
 export _DOMAIN_NOTICE=$(cat <<'HTMLEOF'
 <div id="domain-notice" style="
