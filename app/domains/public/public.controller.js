@@ -316,7 +316,21 @@ const dataset = async (req, res) => {
             .limit(Math.min(Number.parseInt(req.query.limit, 10) || 200, 1_000))
             .lean();
 
-        const materialisedAt = cells[0]?.materialisedAt || null;
+        // From the record every build writes, rather than from the first cell.
+        // Taken from a cell it was null whenever the list was empty —
+        // including when the dataset is healthy and the filter simply matched
+        // nothing — which reads as never built, the ambiguity this endpoint is
+        // meant to resolve rather than add to.
+        //
+        // Not from `datasetState().built_at` either: that comes from the build
+        // journal, which the scheduler writes, so it is null whenever the
+        // rebuild was run directly. This one is written by the rebuild itself,
+        // so it is set whenever there is a dataset to date.
+        const [state, built] = await Promise.all([
+            datasetState(),
+            PublicOperations.findOne().select('materialisedAt').lean(),
+        ]);
+        const materialisedAt = built?.materialisedAt || null;
 
         return res.status(200).json({
             status: 'success',
@@ -333,6 +347,18 @@ const dataset = async (req, res) => {
                 // another source needs to know the current quarter is absent by
                 // design rather than because nothing was donated in it.
                 covers: 'closed quarters only; the quarter in progress is not published',
+                // An empty `cells` has four causes and the list cannot tell
+                // them apart: nothing has ever been built, a build completed
+                // and produced no publishable cell, the builds have been
+                // failing and these figures are old, or the filter matched
+                // nothing. A reader on this route has no second endpoint to
+                // consult and no token to consult one with, so the answer says
+                // which it is.
+                published_dataset: state,
+                // The fourth cause, which the state cannot express: a published
+                // dataset and no cells means the filter matched nothing, not
+                // that nothing was donated.
+                filtered: Object.keys(filter).length > 0,
                 cells: cells.map((cell) => ({
                     recipient: cell.recipientName,
                     recipient_type: cell.recipientType,
@@ -431,17 +457,28 @@ async function materialiseOperations(now) {
         Dispute.countDocuments({ outcome: { $in: ['upheld', 'partially_upheld'] } }),
     ]);
 
-    await PublicOperations.deleteMany({});
-    await PublicOperations.create({
-        donationsHeld,
-        disputesRaised,
-        disputesUpheld,
-        // Null rather than zero. A rate over no disputes is unmeasured, and
-        // reporting it as zero would claim nothing has ever been contested
-        // successfully, which is a different and more flattering statement.
-        disputeUpheldRate: disputesRaised ? disputesUpheld / disputesRaised : null,
-        materialisedAt: now,
-    });
+    // One atomic write, not a delete followed by an insert. Between those two
+    // there was no record at all, so the endpoint answered `published: false`
+    // with the reason "the dataset has not been built" — false at that moment,
+    // since it had been built and was being rebuilt. Brief and small, and the
+    // same mistake the aggregates rebuild was just corrected for: a window in
+    // which the honest-sounding answer is the wrong one, reopening on every
+    // scheduled build.
+    await PublicOperations.findOneAndReplace(
+        { singleton: true },
+        {
+            singleton: true,
+            donationsHeld,
+            disputesRaised,
+            disputesUpheld,
+            // Null rather than zero. A rate over no disputes is unmeasured, and
+            // reporting it as zero would claim nothing has ever been contested
+            // successfully, which is a different and more flattering statement.
+            disputeUpheldRate: disputesRaised ? disputesUpheld / disputesRaised : null,
+            materialisedAt: now,
+        },
+        { upsert: true },
+    );
 }
 
 /**

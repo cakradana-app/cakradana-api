@@ -112,9 +112,15 @@ const publicOperationsSchema = new mongoose.Schema(
         // whole point of publishing the figure.
         disputeUpheldRate: { type: Number, default: null },
         materialisedAt: { type: Date, required: true },
+        // A constant, uniquely indexed below. The replace above targets it, and
+        // the index is what makes "at most one of these" a guarantee rather
+        // than something the writer is trusted to maintain.
+        singleton: { type: Boolean, default: true },
     },
     { timestamps: true },
 );
+
+publicOperationsSchema.index({ singleton: 1 }, { unique: true });
 
 const PublicOperations = mongoose.model('PublicOperations', publicOperationsSchema);
 

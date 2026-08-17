@@ -21,7 +21,11 @@ const assert = require('node:assert/strict');
 
 const { useDatabase } = require('./helpers/database');
 const { Donation, Entity } = require('../app/domains/canonical/canonical.model');
-const { PublicAggregate, MIN_DONORS_PER_CELL } = require('../app/domains/public/public.model');
+const {
+    PublicAggregate,
+    PublicOperations,
+    MIN_DONORS_PER_CELL,
+} = require('../app/domains/public/public.model');
 const controller = require('../app/domains/public/public.controller');
 const { normaliseName } = require('../app/domains/canonical/resolution');
 
@@ -361,4 +365,83 @@ test('an upheld rate over no disputes is unmeasured, not zero', async () => {
     await controller.operations({ query: {} }, res);
     assert.equal(res.sent.body.data.disputes_raised, 0);
     assert.equal(res.sent.body.data.dispute_upheld_rate, null);
+});
+
+test('a rebuild never leaves the operations figures reporting unbuilt', async () => {
+    // The window a delete-then-insert opens. Between the two writes there was
+    // no record, so the endpoint answered `published: false` with the reason
+    // "the dataset has not been built" — false at that moment, because it had
+    // been built and was being rebuilt. One atomic write closes it.
+    await cellWith(MIN_DONORS_PER_CELL);
+    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+    assert.equal(await PublicOperations.countDocuments({}), 1);
+
+    // Rebuild repeatedly; there must never be a moment with no record, and
+    // never more than one.
+    for (let round = 0; round < 5; round += 1) {
+        await controller.materialise({ now: new Date(`2026-08-0${round + 2}T00:00:00Z`) });
+        assert.equal(
+            await PublicOperations.countDocuments({}),
+            1,
+            'a rebuild left either no operations record or more than one',
+        );
+    }
+
+    const res = reply();
+    await controller.operations({ query: {} }, res);
+    assert.equal(res.sent.body.data.published, true);
+});
+
+test('the collection cannot hold two operations records', async () => {
+    // The replace targets a constant key. The index is what makes "at most one"
+    // a guarantee rather than something the writer is trusted to maintain.
+    await cellWith(MIN_DONORS_PER_CELL);
+    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+
+    await assert.rejects(
+        () =>
+            PublicOperations.create({
+                donationsHeld: 999,
+                disputesRaised: 0,
+                disputesUpheld: 0,
+                materialisedAt: new Date(),
+            }),
+        /E11000|duplicate key/,
+    );
+});
+
+test('an empty answer says which of the four causes it is', async () => {
+    // A reader on this route has no second endpoint to consult and no token to
+    // consult one with, so the answer has to say.
+    const nothingBuilt = await serve();
+    assert.equal(nothingBuilt.body.data.cells.length, 0);
+    assert.equal(nothingBuilt.body.data.published_dataset.state, 'never-built');
+    assert.equal(nothingBuilt.body.data.filtered, false);
+    assert.match(
+        nothingBuilt.body.data.published_dataset.note,
+        /not the same as no donations/,
+    );
+
+    // A healthy dataset whose filter matched nothing is a different answer, and
+    // the state alone cannot express it.
+    await cellWith(MIN_DONORS_PER_CELL);
+    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+
+    const filteredOut = await serve({ period: '2020-Q1' });
+    assert.equal(filteredOut.body.data.cells.length, 0);
+    assert.equal(filteredOut.body.data.published_dataset.state, 'published');
+    assert.equal(filteredOut.body.data.filtered, true);
+});
+
+test('the build date survives a filter that matches nothing', async () => {
+    // Taken from the first cell it was null whenever the list was empty,
+    // including for a healthy dataset, which reads as never built.
+    await cellWith(MIN_DONORS_PER_CELL);
+    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+
+    const empty = await serve({ period: '2020-Q1' });
+    assert.ok(
+        empty.body.data.materialised_at,
+        'an empty filtered answer reported no build date',
+    );
 });
