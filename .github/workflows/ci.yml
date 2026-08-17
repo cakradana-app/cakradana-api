@@ -1,0 +1,109 @@
+# Continuous integration for the ingestion and review service.
+#
+# The extraction evaluation is the stage worth explaining. It runs the labelled
+# corpus against a scripted model, which measures the pipeline — parsing, span
+# grounding, vocabulary, date precision — and not a language model. CI has no
+# model, and producing a number that purports to describe one would be exactly
+# the misattribution this project exists not to repeat. A live run against a
+# real provider is `npm run eval:extraction`, and it is required whenever the
+# provider, model, or prompt changes.
+#
+# The gating metric there is the hallucination rate: the failure that attributes
+# a donation to a person the document never named.
+
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # First, and without an install. A committed credential is already in
+      # every clone, so the only useful moment to catch one is immediately.
+      - name: Scan for committed credentials
+        run: node scripts/scan-secrets.js
+
+      # Catches both an undeclared dependency and the dead file that carries
+      # it. This check found two of each on the day it was written.
+      - name: Check every require is declared
+        run: node scripts/check-dependencies.js
+
+  tests:
+    name: tests (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      # Named separately so its failure is legible in the run list. It is the
+      # only stage that measures what the extractor invents rather than what it
+      # finds.
+      - name: Extraction evaluation
+        run: node --test test/extraction-evaluation.test.js
+
+  spec:
+    name: openapi
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install the yaml parser
+        run: pip install pyyaml
+
+      # The spec is maintained by hand and is the source for the published
+      # documentation page. A syntax error there produces a page that renders
+      # nothing, which is discovered by a reader rather than by a build.
+      - name: Parse openapi.yaml
+        run: |
+          python -c "
+          import yaml, sys
+          spec = yaml.safe_load(open('openapi.yaml'))
+          paths = len(spec['paths'])
+          print(f'openapi.yaml parses: {paths} paths')
+          sys.exit(0 if paths > 0 else 1)
+          "
+
+      # The documented page is generated from the spec. When it falls behind,
+      # it documents an API that no longer exists — which is worse than no page
+      # at all, because a reader has no reason to distrust it.
+      - name: Check the published page matches the spec
+        run: |
+          bash openapi.sh
+          if ! git diff --quiet app/templates/pages/index.html; then
+            echo "app/templates/pages/index.html is out of date; run ./openapi.sh" >&2
+            git diff --stat app/templates/pages/index.html >&2
+            exit 1
+          fi
+          echo "The published page matches openapi.yaml."

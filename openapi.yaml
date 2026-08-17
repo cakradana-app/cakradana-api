@@ -178,7 +178,7 @@ paths:
               $ref: '#/components/schemas/ChangePasswordRequest'
             example:
               password: newpassword123
-              token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+              token: <the token from the password-reset email>
       responses:
         '200':
           description: Password changed successfully
