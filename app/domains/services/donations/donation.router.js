@@ -38,6 +38,23 @@ donationRouter.get('/queue', verifyToken, requireRole(REVIEWERS), labelsControll
 // positive is systematic rather than incidental.
 donationRouter.post('/bulk-clear', verifyToken, requireRole(REVIEWERS), labelsController.bulkClear);
 
+// A cluster is one finding, so it takes one judgement. Clearing a forty-donation
+// fan-in as forty separate decisions loses the fact that a group was examined as
+// a group, and makes the retraining signal count one conclusion forty times.
+// Members can be excepted individually, and an exception is marked as one.
+donationRouter.post(
+    '/disposition-alert',
+    verifyToken,
+    requireRole(REVIEWERS),
+    labelsController.dispositionAlert,
+);
+donationRouter.get(
+    '/alert/:id/disposition',
+    verifyToken,
+    requireRole(REVIEWERS),
+    labelsController.alertDisposition,
+);
+
 // Everything needed to judge one donation, assembled before anyone is asked to
 // decide. A score with an approve button is automation with a signature.
 donationRouter.get('/case/:donationId', verifyToken, requireRole(REVIEWERS), caseController.detail);

@@ -200,6 +200,17 @@ const labelSchema = new mongoose.Schema(
         // unrelated judgements; the same hundred sharing an id are one signal
         // that something in the detection is systematically wrong.
         bulkId: { type: mongoose.Schema.Types.ObjectId, default: null },
+        // The structural alert this disposition concerns, when the subject of
+        // the judgement was a cluster rather than a donation. Without it,
+        // clearing a forty-donation fan-in records forty unrelated decisions
+        // and the finding that was actually being dismissed leaves no trace —
+        // which is most of what group alerts were built for.
+        alertId: { type: String, default: null },
+        // Set on a member the analyst deliberately excluded from the cluster's
+        // disposition. An exception is a statement about that donation, and
+        // recording it as an ordinary individual label would lose the fact
+        // that somebody looked at the group and singled this one out.
+        alertException: { type: Boolean, default: false },
         // Later labels supersede earlier ones without deleting them, so a
         // disposition history stays reconstructible.
         supersededBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Label', default: null },
@@ -210,6 +221,7 @@ const labelSchema = new mongoose.Schema(
 labelSchema.index({ donationId: 1, createdAt: -1 });
 labelSchema.index({ source: 1 });
 labelSchema.index({ bulkId: 1 });
+labelSchema.index({ alertId: 1 });
 
 /**
  * A recipient confirming a donation establishes that the transaction

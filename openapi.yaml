@@ -1976,6 +1976,125 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /service/donations/disposition-alert:
+    post:
+      tags:
+        - Donation Management
+      summary: Disposition a structural alert as one finding
+      description: |
+        A fan-in of forty donations is one thing the system noticed, not forty.
+        An analyst who decides it is a legitimate grassroots campaign has made
+        one judgement, and recording it as forty unrelated dispositions loses
+        the part worth keeping: that a cluster was examined as a cluster, by
+        whom, and on what basis. It also corrupts the retraining signal, where
+        forty independent clears look like forty pieces of evidence rather than
+        one.
+
+        Membership is read from the scoring service, never taken from the
+        caller. A caller-supplied member list would let a disposition claim to
+        cover a cluster while covering something else. If structural alerts are
+        unavailable the request is refused rather than degraded into a bulk
+        clear over whatever was sent.
+
+        Members can be excepted individually, each with its own reason: a
+        cluster is rarely homogeneous, and an analyst who accepts the pattern
+        apart from two donations should not have to abandon the group
+        judgement. An exception is marked as one, so it reads afterwards as a
+        deliberate carve-out rather than an ordinary label that disagrees with
+        its neighbours.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [alert_id, reason]
+              properties:
+                alert_id:
+                  type: string
+                value:
+                  type: string
+                  default: not_risky
+                reason:
+                  type: string
+                typology:
+                  type: string
+                  nullable: true
+                except:
+                  type: array
+                  description: Members carved out of the cluster's disposition
+                  items:
+                    type: object
+                    required: [donation_id, reason]
+                    properties:
+                      donation_id:
+                        type: string
+                      value:
+                        type: string
+                        default: risky
+                      reason:
+                        type: string
+      responses:
+        '200':
+          description: One judgement recorded about a cluster
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Missing reason, unknown value, or an exception outside the cluster
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such alert in the last detection pass
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Structural alerts unavailable, so the cluster cannot be established
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/donations/alert/{id}/disposition:
+    get:
+      tags:
+        - Donation Management
+      summary: What was decided about a cluster
+      description: |
+        Reads back the group judgement rather than the member labels. "Was this
+        cluster examined, by whom, and what did they conclude" has an answer
+        that a list of forty labels obscures.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The cluster's disposition, or that it has none
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /service/donations/network:
     get:
       tags:

@@ -21,6 +21,7 @@ const mongoose = require('mongoose');
 const { Donation, Label, ScoringEvent } = require('../../canonical/canonical.model');
 const { record } = require('../../canonical/retention');
 const { LABEL_VALUES } = require('../../vocabulary');
+const scoring = require('../../../utils/scoring/client');
 
 /**
  * How far each source is trusted when it reaches training.
@@ -461,6 +462,227 @@ const bulkClear = async (req, res) => {
 };
 
 /**
+ * Disposition a structural alert as one finding.
+ *
+ * A fan-in of forty donations is one thing the system noticed, not forty. An
+ * analyst who decides it is a legitimate grassroots campaign has made one
+ * judgement, and recording it as forty unrelated dispositions loses exactly
+ * the part worth keeping: that a cluster was examined as a cluster, by whom,
+ * and on what basis. It also makes the retraining signal wrong — forty
+ * independent clears look like forty pieces of evidence rather than one.
+ *
+ * Members can be excepted individually. A cluster is usually not homogeneous,
+ * and an analyst who accepts the pattern as benign apart from two donations
+ * needs to say so without abandoning the group judgement for forty separate
+ * ones. An exception is marked as such, so it is legible afterwards as a
+ * deliberate carve-out rather than as an ordinary label that happens to
+ * disagree with its neighbours.
+ *
+ * The cluster's membership is read from the scoring service rather than
+ * accepted from the caller. A caller-supplied member list would let a
+ * disposition claim to cover a cluster while covering something else.
+ */
+const dispositionAlert = async (req, res) => {
+    try {
+        const {
+            alert_id: alertId,
+            value,
+            reason,
+            typology,
+            except = [],
+        } = req.body || {};
+
+        if (!alertId) return fail(res, 400, 'alert_id is required');
+        if (!reason) {
+            return fail(
+                res,
+                400,
+                'reason is required: a cluster dismissed without a recorded basis ' +
+                    'is indistinguishable from one nobody examined',
+            );
+        }
+        const labelValue = value || 'not_risky';
+        if (!LABEL_VALUES.includes(labelValue)) {
+            return fail(res, 400, `value must be one of: ${LABEL_VALUES.join(', ')}`);
+        }
+        if (!Array.isArray(except)) {
+            return fail(res, 400, 'except must be an array of exceptions');
+        }
+        const actor = req.user?.email || null;
+        if (!actor) return fail(res, 400, 'a disposition must name the person making it');
+
+        let report;
+        try {
+            report = await scoring.groupAlerts();
+        } catch (err) {
+            // Refused rather than degraded to a bulk clear over whatever the
+            // caller sent. A disposition recorded against an alert nobody
+            // could read is a claim about a cluster whose membership is
+            // unknown.
+            return fail(
+                res,
+                503,
+                'structural alerts are unavailable, so the cluster this ' +
+                    'disposition claims to cover cannot be established',
+                { reason: err.message },
+            );
+        }
+
+        const alert = (report?.alerts || []).find((a) => a.alert_id === alertId);
+        if (!alert) {
+            return fail(res, 404, 'No such alert in the last detection pass', {
+                detected_at: report?.detected_at || null,
+                has_run: Boolean(report?.has_run),
+            });
+        }
+
+        const memberIds = alert.subject?.donations || [];
+        if (memberIds.length === 0) {
+            return fail(res, 409, 'This alert covers no donations');
+        }
+
+        const exceptions = new Map();
+        for (const item of except) {
+            const id = item?.donation_id;
+            if (!id) return fail(res, 400, 'each exception needs a donation_id');
+            if (!memberIds.includes(String(id))) {
+                return fail(
+                    res,
+                    400,
+                    `donation ${id} is not part of this cluster; an exception can ` +
+                        'only carve out a member',
+                );
+            }
+            if (!item.reason) {
+                return fail(
+                    res,
+                    400,
+                    `an exception for donation ${id} needs its own reason; it is a ` +
+                        'separate judgement from the one made about the cluster',
+                );
+            }
+            const exceptionValue = item.value || 'risky';
+            if (!LABEL_VALUES.includes(exceptionValue)) {
+                return fail(res, 400, `value must be one of: ${LABEL_VALUES.join(', ')}`);
+            }
+            exceptions.set(String(id), { value: exceptionValue, reason: item.reason });
+        }
+
+        const donations = await Donation.find({ _id: { $in: memberIds } }).lean();
+        const found = new Set(donations.map((d) => String(d._id)));
+        const missing = memberIds.filter((id) => !found.has(String(id)));
+
+        const bulkId = new mongoose.Types.ObjectId();
+        const created = [];
+        for (const donation of donations) {
+            const carveOut = exceptions.get(String(donation._id));
+            const previous = await Label.findOne({
+                donationId: donation._id,
+                source: 'analyst_disposition',
+                supersededBy: null,
+            }).sort({ createdAt: -1 });
+
+            const label = await Label.create({
+                donationId: donation._id,
+                donationVersion: donation.donationVersion || 1,
+                value: carveOut ? carveOut.value : labelValue,
+                source: 'analyst_disposition',
+                typology: typology || alert.typology || null,
+                weight: SOURCE_WEIGHTS.analyst_disposition,
+                actor,
+                note: carveOut
+                    ? `${carveOut.reason} (excepted from ${alert.kind} ${alertId}: ${reason})`
+                    : reason,
+                bulkId,
+                alertId,
+                alertException: Boolean(carveOut),
+            });
+            if (previous) {
+                await Label.updateOne({ _id: previous._id }, { supersededBy: label._id });
+            }
+            created.push(String(label._id));
+        }
+
+        await record({
+            actor,
+            action: 'disposition-alert',
+            subjectType: 'Alert',
+            subjectId: alertId,
+            reason,
+        });
+
+        return res.status(200).json({
+            status: 'success',
+            message: 'Recorded one judgement about a cluster',
+            data: {
+                alert_id: alertId,
+                kind: alert.kind,
+                bulk_id: String(bulkId),
+                members: memberIds.length,
+                labelled: created.length,
+                exceptions: [...exceptions.keys()],
+                labels: created,
+                not_found: missing,
+                // Carried forward from the alert so the record of what was
+                // dismissed includes how much of it rested on parties nobody
+                // had resolved.
+                provisional_node_ratio: alert.provisional_node_ratio ?? null,
+            },
+        });
+    } catch (err) {
+        return serverError(res, err, 'Error dispositioning an alert');
+    }
+};
+
+/**
+ * What has been decided about a cluster, as one record.
+ *
+ * Reads back the group judgement rather than the member labels, because the
+ * question "was this cluster examined, by whom, and what did they conclude" has
+ * an answer that a list of forty labels obscures.
+ */
+const alertDisposition = async (req, res) => {
+    try {
+        const alertId = req.params.id;
+        const labels = await Label.find({ alertId, supersededBy: null })
+            .sort({ createdAt: -1 })
+            .lean();
+
+        if (labels.length === 0) {
+            return res.status(200).json({
+                status: 'success',
+                message: 'No disposition recorded for this cluster',
+                data: { alert_id: alertId, dispositioned: false, labels: [] },
+            });
+        }
+
+        const groupLabels = labels.filter((l) => !l.alertException);
+        const exceptions = labels.filter((l) => l.alertException);
+
+        return res.status(200).json({
+            status: 'success',
+            message: 'Cluster disposition',
+            data: {
+                alert_id: alertId,
+                dispositioned: true,
+                decided_by: groupLabels[0]?.actor || labels[0].actor,
+                decided_at: groupLabels[0]?.createdAt || labels[0].createdAt,
+                value: groupLabels[0]?.value || null,
+                reason: groupLabels[0]?.note || null,
+                members_covered: groupLabels.length,
+                exceptions: exceptions.map((l) => ({
+                    donation_id: l.donationId,
+                    value: l.value,
+                    reason: l.note,
+                })),
+            },
+        });
+    } catch (err) {
+        return serverError(res, err, 'Error reading a cluster disposition');
+    }
+};
+
+/**
  * A failure on our side is a 5xx.
  *
  * Returning 400 for a database fault reports a service error as the caller's
@@ -483,6 +705,8 @@ module.exports = {
     disputeOutcome,
     queue,
     bulkClear,
+    dispositionAlert,
+    alertDisposition,
     queueFilters,
     queueBudget,
     SOURCE_WEIGHTS,
