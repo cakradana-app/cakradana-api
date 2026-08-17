@@ -76,12 +76,32 @@ async function isPartyTo(donation, email, party) {
     if (!user) return false;
 
     const ref = donation[`${party}Ref`] || {};
-    if (ref.rawText && ref.rawText === user.name) return true;
 
+    // A verified link is an identity, and is accepted unconditionally. It
+    // follows a merge: an account whose entity was absorbed is still party to
+    // the donations that moved with it.
     if (user.entityId && user.entityLinkVerifiedAt) {
         const entity = await Entity.findById(user.entityId).lean();
         const target = String(entity?.mergedInto || user.entityId);
         if (String(ref.entityId || '') === target) return true;
+    }
+
+    // A name is not. It is chosen at registration, verified by nobody, and made
+    // permanent by the uniqueness constraint — so registering as a donor named
+    // in the records is enough to attest to their donations, and they can never
+    // register under their own name to contest it. A confirmation reaches
+    // training at weight 0.7 and is shown to a reviewer as an account of the
+    // transaction, which is worth more than it would be if anybody could write
+    // one about anybody.
+    //
+    // Left reachable only for a deployment whose accounts predate entity
+    // linking, and off unless that deployment says so.
+    if (
+        ref.rawText &&
+        ref.rawText === user.name &&
+        process.env.ALLOW_NAME_SCOPED_SUBJECT_VIEWS === 'true'
+    ) {
+        return true;
     }
     return false;
 }

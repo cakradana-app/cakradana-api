@@ -101,7 +101,46 @@ async function subjectScope(user) {
         };
     }
 
+    // A name that identifies one account is not the same as a name that
+    // identifies one person. The name is chosen at registration, registration
+    // issues a working token without verifying anything, and the uniqueness
+    // constraint then makes the claim permanent: somebody who registers as a
+    // donor named in the records is the only account with that name, so the
+    // check above passes, and the real donor can never register under their own
+    // name to contest it.
+    //
+    // So the fallback is off unless a deployment turns it on. That direction
+    // matters — the safe behaviour is the default and the escape hatch is the
+    // thing an operator has to choose, because the cost of being wrong here is
+    // disclosing somebody's politics to a stranger, which no later correction
+    // undoes.
+    if (!nameScopeAllowed()) {
+        return {
+            kind: 'refused',
+            reason:
+                'this account is not linked to a verified entity. A name is chosen ' +
+                'at registration and verified by nobody, so matching donations to ' +
+                'it could show one person’s records to another.',
+        };
+    }
+
+    log.warn('serving a name-scoped subject view', {
+        reason: 'ALLOW_NAME_SCOPED_SUBJECT_VIEWS is set',
+        discloses:
+            'donations naming this account’s self-asserted name, which nobody verified',
+    });
     return { kind: 'name', name: user.name };
+}
+
+/**
+ * Whether unverified name matching may scope a subject view.
+ *
+ * Off unless set to exactly `true`. A deployment whose accounts predate entity
+ * linking needs it to keep working while the links are established, and that is
+ * the only reason it exists.
+ */
+function nameScopeAllowed() {
+    return process.env.ALLOW_NAME_SCOPED_SUBJECT_VIEWS === 'true';
 }
 
 /**

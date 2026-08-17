@@ -80,6 +80,24 @@ async function makeDonation(senderName, receiverName, extra = {}) {
     });
 }
 
+/**
+ * Run with unverified name matching permitted.
+ *
+ * Off by default, because a name is chosen at registration and verified by
+ * nobody. The tests that exercise the name path turn it on explicitly rather
+ * than inheriting it, so that the default staying safe is itself visible.
+ */
+function withNameScope(run) {
+    const previous = process.env.ALLOW_NAME_SCOPED_SUBJECT_VIEWS;
+    process.env.ALLOW_NAME_SCOPED_SUBJECT_VIEWS = 'true';
+    return Promise.resolve()
+        .then(run)
+        .finally(() => {
+            if (previous === undefined) delete process.env.ALLOW_NAME_SCOPED_SUBJECT_VIEWS;
+            else process.env.ALLOW_NAME_SCOPED_SUBJECT_VIEWS = previous;
+        });
+}
+
 async function asParty(user, party) {
     const res = reply();
     const fn = party === 'sender' ? controller.listAsSender : controller.listAsReceiver;
@@ -111,18 +129,19 @@ test('ingestion no longer writes the single document', async () => {
     );
 });
 
-test('a subject sees the records that name them', async () => {
-    const user = await makeUser();
-    await makeDonation('Budi Santoso', 'Partai Maju');
-    await makeDonation('Ani Wijaya', 'Partai Maju');
+test('a subject sees the records that name them', async () =>
+    withNameScope(async () => {
+        const user = await makeUser();
+        await makeDonation('Budi Santoso', 'Partai Maju');
+        await makeDonation('Ani Wijaya', 'Partai Maju');
 
-    const sent = await asParty(user, 'sender');
-    assert.equal(sent.status, 200);
-    assert.equal(sent.body.data.length, 1);
-    assert.equal(sent.body.data[0].sender, 'Budi Santoso');
-    assert.equal(sent.body.data[0].amount, 10_000_000);
-    assert.equal(sent.body.scope, 'name match');
-});
+        const sent = await asParty(user, 'sender');
+        assert.equal(sent.status, 200);
+        assert.equal(sent.body.data.length, 1);
+        assert.equal(sent.body.data[0].sender, 'Budi Santoso');
+        assert.equal(sent.body.data[0].amount, 10_000_000);
+        assert.equal(sent.body.scope, 'name match');
+    }));
 
 test('two accounts cannot share the name a subject view scopes on', async () => {
     // The name-scoped view is only safe because the name identifies exactly
@@ -138,34 +157,35 @@ test('two accounts cannot share the name a subject view scopes on', async () => 
     );
 });
 
-test('a shared name is refused rather than guessed at', async () => {
-    // Set up under the one condition that makes it reachable: an index that
-    // was never built, on a deployment that therefore already holds
-    // duplicates. That is exactly what the branch is for, and testing it any
-    // other way would be testing a stub.
-    await User.collection.dropIndex('name_1');
-    try {
-        await User.collection.insertMany([
-            { name: 'Budi Santoso', email: 'budi.a@example.test', type: 'individual' },
-            { name: 'Budi Santoso', email: 'budi.b@example.test', type: 'individual' },
-        ]);
-        await makeDonation('Budi Santoso', 'Partai Maju');
+test('a shared name is refused rather than guessed at', async () =>
+    withNameScope(async () => {
+        // Set up under the one condition that makes it reachable: an index that
+        // was never built, on a deployment that therefore already holds
+        // duplicates. That is exactly what the branch is for, and testing it any
+        // other way would be testing a stub.
+        await User.collection.dropIndex('name_1');
+        try {
+            await User.collection.insertMany([
+                { name: 'Budi Santoso', email: 'budi.a@example.test', type: 'individual' },
+                { name: 'Budi Santoso', email: 'budi.b@example.test', type: 'individual' },
+            ]);
+            await makeDonation('Budi Santoso', 'Partai Maju');
 
-        const sent = await asParty({ email: 'budi.b@example.test' }, 'sender');
-        assert.equal(sent.status, 409);
-        assert.match(sent.body.message, /more than one account/);
-        // The remedy is named, because being told the system cannot identify
-        // you is only actionable alongside how to fix it.
-        assert.match(sent.body.data.remedy, /verified entity/);
-    } finally {
-        // The duplicates have to go before the constraint can come back, and
-        // it has to come back: the harness empties collections between tests
-        // but leaves indexes alone, so a dropped one would stay dropped and
-        // the test above would stop checking anything.
-        await User.collection.deleteMany({});
-        await User.collection.createIndex({ name: 1 }, { unique: true });
-    }
-});
+            const sent = await asParty({ email: 'budi.b@example.test' }, 'sender');
+            assert.equal(sent.status, 409);
+            assert.match(sent.body.message, /more than one account/);
+            // The remedy is named, because being told the system cannot identify
+            // you is only actionable alongside how to fix it.
+            assert.match(sent.body.data.remedy, /verified entity/);
+        } finally {
+            // The duplicates have to go before the constraint can come back, and
+            // it has to come back: the harness empties collections between tests
+            // but leaves indexes alone, so a dropped one would stay dropped and
+            // the test above would stop checking anything.
+            await User.collection.deleteMany({});
+            await User.collection.createIndex({ name: 1 }, { unique: true });
+        }
+    }));
 
 test('a verified link finds records filed under any spelling', async () => {
     // The stronger claim, and what the link is for: an account matched to an
@@ -202,23 +222,24 @@ test('a linked account whose entity was merged away follows the survivor', async
     assert.equal(sent.body.data.length, 1);
 });
 
-test('a corrected record does not appear beside its correction', async () => {
-    // A correction is a new version rather than an edit, so both exist. The
-    // single document had no way to express that, and returning both shows the
-    // same donation twice — once with the value that was corrected.
-    const superseding = await makeDonation('Budi Santoso', 'Partai Maju', {
-        amountIdr: 12_000_000,
-    });
-    await makeDonation('Budi Santoso', 'Partai Maju', {
-        amountIdr: 10_000_000,
-        supersededBy: superseding._id,
-    });
+test('a corrected record does not appear beside its correction', async () =>
+    withNameScope(async () => {
+        // A correction is a new version rather than an edit, so both exist. The
+        // single document had no way to express that, and returning both shows the
+        // same donation twice — once with the value that was corrected.
+        const superseding = await makeDonation('Budi Santoso', 'Partai Maju', {
+            amountIdr: 12_000_000,
+        });
+        await makeDonation('Budi Santoso', 'Partai Maju', {
+            amountIdr: 10_000_000,
+            supersededBy: superseding._id,
+        });
 
-    const user = await makeUser();
-    const sent = await asParty(user, 'sender');
-    assert.equal(sent.body.data.length, 1);
-    assert.equal(sent.body.data[0].amount, 12_000_000);
-});
+        const user = await makeUser();
+        const sent = await asParty(user, 'sender');
+        assert.equal(sent.body.data.length, 1);
+        assert.equal(sent.body.data[0].amount, 12_000_000);
+    }));
 
 test('an entity merged away is not listed as a second donor', async () => {
     const survivor = await makeEntity('Budi Santoso');
@@ -233,53 +254,55 @@ test('an entity merged away is not listed as a second donor', async () => {
     );
 });
 
-test('a confirmation names the party that gave it', async () => {
-    // The single document held two booleans on the row. A confirmation is now
-    // a label naming its party, so one party confirming twice cannot read as
-    // two accounts of the same transaction.
-    const user = await makeUser();
-    const donation = await makeDonation('Budi Santoso', 'Partai Maju');
+test('a confirmation names the party that gave it', async () =>
+    withNameScope(async () => {
+        // The single document held two booleans on the row. A confirmation is now
+        // a label naming its party, so one party confirming twice cannot read as
+        // two accounts of the same transaction.
+        const user = await makeUser();
+        const donation = await makeDonation('Budi Santoso', 'Partai Maju');
 
-    const res = reply();
-    await controller.confirmAsSender(
-        { user: { email: user.email }, body: { donationId: String(donation._id) } },
-        res,
-    );
-    assert.equal(res.sent.status, 200);
-    assert.equal(res.sent.body.data.confirmed_as, 'sender');
-    assert.equal(res.sent.body.data.confirmed_by_both_parties, false);
+        const res = reply();
+        await controller.confirmAsSender(
+            { user: { email: user.email }, body: { donationId: String(donation._id) } },
+            res,
+        );
+        assert.equal(res.sent.status, 200);
+        assert.equal(res.sent.body.data.confirmed_as, 'sender');
+        assert.equal(res.sent.body.data.confirmed_by_both_parties, false);
 
-    const label = await Label.findOne({ donationId: donation._id }).lean();
-    assert.equal(label.source, 'recipient_confirmation');
-    assert.equal(label.confirmedParty, 'sender');
-    // A confirmation establishes that the transaction happened and says
-    // nothing about risk. The schema refuses any other value from this source.
-    assert.equal(label.value, 'indeterminate');
-});
+        const label = await Label.findOne({ donationId: donation._id }).lean();
+        assert.equal(label.source, 'recipient_confirmation');
+        assert.equal(label.confirmedParty, 'sender');
+        // A confirmation establishes that the transaction happened and says
+        // nothing about risk. The schema refuses any other value from this source.
+        assert.equal(label.value, 'indeterminate');
+    }));
 
-test('confirmation by the other party is counted separately', async () => {
-    const sender = await makeUser();
-    const receiver = await makeUser({
-        name: 'Partai Maju',
-        email: 'partai@example.test',
-        type: 'political-party',
-    });
-    const donation = await makeDonation('Budi Santoso', 'Partai Maju');
+test('confirmation by the other party is counted separately', async () =>
+    withNameScope(async () => {
+        const sender = await makeUser();
+        const receiver = await makeUser({
+            name: 'Partai Maju',
+            email: 'partai@example.test',
+            type: 'political-party',
+        });
+        const donation = await makeDonation('Budi Santoso', 'Partai Maju');
 
-    const first = reply();
-    await controller.confirmAsSender(
-        { user: { email: sender.email }, body: { donationId: String(donation._id) } },
-        first,
-    );
-    const second = reply();
-    await controller.confirmAsReceiver(
-        { user: { email: receiver.email }, body: { donationId: String(donation._id) } },
-        second,
-    );
+        const first = reply();
+        await controller.confirmAsSender(
+            { user: { email: sender.email }, body: { donationId: String(donation._id) } },
+            first,
+        );
+        const second = reply();
+        await controller.confirmAsReceiver(
+            { user: { email: receiver.email }, body: { donationId: String(donation._id) } },
+            second,
+        );
 
-    assert.equal(second.sent.body.data.confirmed_by_both_parties, true);
-    assert.equal(await Label.countDocuments({ donationId: donation._id }), 2);
-});
+        assert.equal(second.sent.body.data.confirmed_by_both_parties, true);
+        assert.equal(await Label.countDocuments({ donationId: donation._id }), 2);
+    }));
 
 test('confirming a donation this account is not party to is refused', async () => {
     const user = await makeUser();
@@ -318,22 +341,23 @@ test('the refusal for a donation that is not yours reads the same as one that do
     assert.equal(absent.sent.body.message, refused.sent.body.message);
 });
 
-test('the confirmations a subject sees are the ones actually recorded', async () => {
-    const user = await makeUser();
-    const donation = await makeDonation('Budi Santoso', 'Partai Maju');
-    await Label.create({
-        donationId: donation._id,
-        donationVersion: 1,
-        value: 'indeterminate',
-        source: 'recipient_confirmation',
-        weight: 0.7,
-        confirmedParty: 'receiver',
-    });
+test('the confirmations a subject sees are the ones actually recorded', async () =>
+    withNameScope(async () => {
+        const user = await makeUser();
+        const donation = await makeDonation('Budi Santoso', 'Partai Maju');
+        await Label.create({
+            donationId: donation._id,
+            donationVersion: 1,
+            value: 'indeterminate',
+            source: 'recipient_confirmation',
+            weight: 0.7,
+            confirmedParty: 'receiver',
+        });
 
-    const sent = await asParty(user, 'sender');
-    assert.equal(sent.body.data[0].senderConfirmed, false);
-    assert.equal(sent.body.data[0].receiverConfirmed, true);
-});
+        const sent = await asParty(user, 'sender');
+        assert.equal(sent.body.data[0].senderConfirmed, false);
+        assert.equal(sent.body.data[0].receiverConfirmed, true);
+    }));
 
 test('the reviewer list excludes superseded records and reports the store', async () => {
     const superseding = await makeDonation('Budi Santoso', 'Partai Maju');
@@ -345,40 +369,42 @@ test('the reviewer list excludes superseded records and reports the store', asyn
     assert.equal(res.sent.body.data.length, 1);
 });
 
-test('a capped list says it was capped', async () => {
-    // A capped list that does not say so reads as the complete set, and the
-    // reader with most to lose from that is the subject: somebody checking
-    // which donations are attributed to them would conclude the ones past the
-    // cap do not exist.
-    const user = await makeUser();
-    const rows = Array.from({ length: 205 }, (_, index) => ({
-        senderRef: { entityId: null, rawText: 'Budi Santoso' },
-        receiverRef: { entityId: null, rawText: 'Partai Maju' },
-        amountIdr: 1_000_000 + index,
-        occurredAt: new Date('2026-06-05T00:00:00Z'),
-        recordedAt: new Date('2026-06-05T00:00:00Z'),
-        channel: 'digital-form',
-        dedupKey: `cap-${index}`,
+test('a capped list says it was capped', async () =>
+    withNameScope(async () => {
+        // A capped list that does not say so reads as the complete set, and the
+        // reader with most to lose from that is the subject: somebody checking
+        // which donations are attributed to them would conclude the ones past the
+        // cap do not exist.
+        const user = await makeUser();
+        const rows = Array.from({ length: 205 }, (_, index) => ({
+            senderRef: { entityId: null, rawText: 'Budi Santoso' },
+            receiverRef: { entityId: null, rawText: 'Partai Maju' },
+            amountIdr: 1_000_000 + index,
+            occurredAt: new Date('2026-06-05T00:00:00Z'),
+            recordedAt: new Date('2026-06-05T00:00:00Z'),
+            channel: 'digital-form',
+            dedupKey: `cap-${index}`,
+        }));
+        await Donation.insertMany(rows);
+
+        const sent = await asParty(user, 'sender');
+        assert.equal(sent.body.data.length, 200);
+        assert.equal(sent.body.page.total, 205);
+        assert.equal(sent.body.page.shown, 200);
+        assert.equal(sent.body.page.complete, false);
+        assert.match(sent.body.page.truncated, /200 most recent of 205/);
     }));
-    await Donation.insertMany(rows);
 
-    const sent = await asParty(user, 'sender');
-    assert.equal(sent.body.data.length, 200);
-    assert.equal(sent.body.page.total, 205);
-    assert.equal(sent.body.page.shown, 200);
-    assert.equal(sent.body.page.complete, false);
-    assert.match(sent.body.page.truncated, /200 most recent of 205/);
-});
+test('a list that fits says it is complete', async () =>
+    withNameScope(async () => {
+        const user = await makeUser();
+        await makeDonation('Budi Santoso', 'Partai Maju');
 
-test('a list that fits says it is complete', async () => {
-    const user = await makeUser();
-    await makeDonation('Budi Santoso', 'Partai Maju');
-
-    const sent = await asParty(user, 'sender');
-    assert.equal(sent.body.page.complete, true);
-    assert.equal(sent.body.page.total, 1);
-    assert.equal(sent.body.page.truncated, undefined);
-});
+        const sent = await asParty(user, 'sender');
+        assert.equal(sent.body.page.complete, true);
+        assert.equal(sent.body.page.total, 1);
+        assert.equal(sent.body.page.truncated, undefined);
+    }));
 
 test('a stranger cannot confirm a donation they are not party to', async () => {
     // The route these functions are mounted on directly had no entitlement
@@ -421,27 +447,28 @@ test('an operator where a donation id goes is refused', async () => {
     assert.equal(await Label.countDocuments({}), 0);
 });
 
-test('the named party can still confirm, through either route', async () => {
-    // The refusals above are only correct if the legitimate path still works.
-    const labels = require('../app/domains/services/donations/labels.controller');
-    const user = await makeUser();
-    const donation = await makeDonation('Budi Santoso', 'Partai Maju');
+test('the named party can still confirm, through either route', async () =>
+    withNameScope(async () => {
+        // The refusals above are only correct if the legitimate path still works.
+        const labels = require('../app/domains/services/donations/labels.controller');
+        const user = await makeUser();
+        const donation = await makeDonation('Budi Santoso', 'Partai Maju');
 
-    const direct = reply();
-    await labels.confirmAsSender(
-        { body: { donation_id: String(donation._id) }, user: { email: user.email } },
-        direct,
-    );
-    assert.equal(direct.sent.status, 200);
-    assert.equal(direct.sent.body.data.confirmed_as, 'sender');
+        const direct = reply();
+        await labels.confirmAsSender(
+            { body: { donation_id: String(donation._id) }, user: { email: user.email } },
+            direct,
+        );
+        assert.equal(direct.sent.status, 200);
+        assert.equal(direct.sent.body.data.confirmed_as, 'sender');
 
-    const viaSubjectView = reply();
-    await controller.confirmAsSender(
-        { body: { donationId: String(donation._id) }, user: { email: user.email } },
-        viaSubjectView,
-    );
-    assert.equal(viaSubjectView.sent.status, 200);
-});
+        const viaSubjectView = reply();
+        await controller.confirmAsSender(
+            { body: { donationId: String(donation._id) }, user: { email: user.email } },
+            viaSubjectView,
+        );
+        assert.equal(viaSubjectView.sent.status, 200);
+    }));
 
 test('a superseded donation cannot be confirmed', async () => {
     // Confirming the version that was corrected attests to a figure the record
@@ -459,4 +486,72 @@ test('a superseded donation cannot be confirmed', async () => {
         res,
     );
     assert.equal(res.sent.status, 404);
+});
+
+test('an unverified name does not scope a subject view by default', async () => {
+    // The squat. A name is chosen at registration, registration issues a
+    // working token without verifying anything, and the uniqueness constraint
+    // makes the claim permanent — so somebody registering as a donor named in
+    // the records is the only account with that name, passes the collision
+    // check, and the real donor can never register under their own name to
+    // contest it. What that would disclose is somebody's politics, to a
+    // stranger, irreversibly.
+    const squatter = await makeUser({ name: 'Budi Santoso', email: 'not-budi@evil.test' });
+    await makeDonation('Budi Santoso', 'Partai Maju');
+
+    const sent = await asParty(squatter, 'sender');
+    assert.equal(sent.status, 409);
+    assert.match(sent.body.message, /verified by nobody|not linked to a verified entity/);
+    assert.equal(sent.body.data.remedy, 'link this account to a verified entity');
+});
+
+test('a verified link still works with the fallback off', async () => {
+    // The refusal above is only correct if the sound path is unaffected.
+    const entity = await makeEntity('Budi Santoso');
+    const user = await makeUser({
+        entityId: entity._id,
+        entityLinkVerifiedAt: new Date(),
+    });
+    await makeDonation('Budi Santoso', 'Partai Maju', { senderId: entity._id });
+
+    const sent = await asParty(user, 'sender');
+    assert.equal(sent.status, 200);
+    assert.equal(sent.body.data.length, 1);
+    assert.equal(sent.body.scope, 'verified entity link');
+});
+
+test('an unverified name cannot write a confirmation either', async () => {
+    // A confirmation reaches training at weight 0.7 and is shown to a reviewer
+    // as an account of the transaction. It is worth less than that if anybody
+    // can write one about anybody.
+    const labels = require('../app/domains/services/donations/labels.controller');
+    const squatter = await makeUser({ name: 'Budi Santoso', email: 'not-budi@evil.test' });
+    const donation = await makeDonation('Budi Santoso', 'Partai Maju');
+
+    const res = reply();
+    await labels.confirmAsSender(
+        { body: { donation_id: String(donation._id) }, user: { email: squatter.email } },
+        res,
+    );
+    assert.equal(res.sent.status, 404);
+    assert.equal(await Label.countDocuments({}), 0);
+});
+
+test('a verified party can confirm with the fallback off', async () => {
+    const labels = require('../app/domains/services/donations/labels.controller');
+    const entity = await makeEntity('Budi Santoso');
+    const user = await makeUser({
+        entityId: entity._id,
+        entityLinkVerifiedAt: new Date(),
+    });
+    const donation = await makeDonation('Budi Santoso', 'Partai Maju', {
+        senderId: entity._id,
+    });
+
+    const res = reply();
+    await labels.confirmAsSender(
+        { body: { donation_id: String(donation._id) }, user: { email: user.email } },
+        res,
+    );
+    assert.equal(res.sent.status, 200);
 });
