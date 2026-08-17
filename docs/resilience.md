@@ -40,6 +40,38 @@ What is captured and why each collection cannot simply be rebuilt is listed in
 `BACKUP_SET`; what is deliberately left out, and why, is listed in
 `NOT_BACKED_UP` next to it.
 
+### The legacy document
+
+`services` — the single document the service began with — is in the backup set,
+and the reason is worth stating because it looks like it should not be.
+Ingestion no longer writes it, and every row written while both stores were
+being updated has a canonical counterpart, so it reads as derived. It is not
+derived for the rows written *before* the canonical collections existed: those
+were never copied anywhere, and `scripts/backfill-canonical.js` is what moves
+them. Until that has run against a deployment, the legacy document is the only
+copy of those donations.
+
+Getting this wrong in the safe-sounding direction loses data in silence.
+Restore from an archive that skipped the singleton and those donations are gone;
+run the backfill afterwards and it finds an empty document and reports "nothing
+to move", which reads as success.
+
+So it is measured rather than assumed, by `legacySingletonStatus`, on the
+definition the backfill itself uses — a row whose `_id` appears in no
+`Donation.legacyDonationId`:
+
+| `state` | Meaning |
+|---|---|
+| `load-bearing` | some rows exist nowhere else. Run `npm run backfill -- --apply`. Until then the collection must stay in the backup set |
+| `derived` | every row has a canonical counterpart. The collection could be dropped from the set once the document itself is dropped from the deployment |
+| `absent` | this deployment has no legacy document at all |
+| `unknown` | the document could not be read — not the same as zero, and not a basis for dropping anything |
+
+Reported at `GET /service/monitoring/resilience` and as
+`cakradana_legacy_only_donations`. The reading is cached for five minutes,
+because the document it reads can approach the sixteen-megabyte limit that is
+the reason for retiring it, and the number changes only when a backfill runs.
+
 Two behaviours are worth knowing before relying on it:
 
 - **It refuses to produce an empty archive.** A dump against the wrong database,
@@ -172,6 +204,11 @@ cakradana_rpo_objective_seconds`, with a second one on
 different failures: a schedule that slipped, and a schedule that was never
 created.
 
+`cakradana_legacy_only_donations > 0` is worth watching too, though it is a
+migration signal rather than a backup one: it counts donations that exist only
+in the legacy document, and it should fall to zero once the backfill has run and
+stay there.
+
 `cakradana_store_metrics_available 0` means the gauges could not be read, which
 is not the same as a breach and must not page the same person for the same
 reason.
@@ -197,6 +234,7 @@ it.
   data and rely on the storage they are written to for confidentiality. Writing
   them somewhere with encryption at rest and access control is part of deploying
   this, not part of running the script.
-- **The published dataset and the legacy singleton are not backed up.** Both are
-  derived from what is, and restoring a stale copy of a published view would
-  republish figures that may since have been corrected.
+- **The published dataset is not backed up.** It is materialised from donations
+  on a schedule by `public.scheduler.js`, so it is rebuildable by construction —
+  and restoring a stale copy would republish figures that may since have been
+  corrected. Losing it costs a rebuild, not a record.
