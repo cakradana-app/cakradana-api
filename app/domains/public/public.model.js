@@ -26,6 +26,36 @@ const MIN_DONORS_PER_CELL = 5;
 /** Rounding applied to published totals, blunting differencing between releases. */
 const AMOUNT_ROUNDING_IDR = 1_000_000;
 
+/**
+ * How long after a quarter closes before its figures are first published.
+ *
+ * A published figure is frozen, because republishing a revised one lets an
+ * observer difference the two and recover what changed — which for a cell that
+ * gains one donor is that donor's donation, to the rupiah, against a named
+ * recipient. The freeze rested on a claim that a closed quarter does not move.
+ * That claim is false here by design: ingestion is asynchronous, paper forms
+ * are OCR'd and admitted well after the fact, and the scoring sweeper exists
+ * because records arrive late. So the first build after a quarter closed froze
+ * whatever had happened to arrive by then, and a recipient whose donors' forms
+ * were still in the queue could be published as suppressed and stay that way —
+ * reporting no donors for a quarter in which it received a great deal.
+ *
+ * Waiting does not resolve the conflict between "may be revised" and "may not
+ * be republished". It makes the frozen figure much likelier to be the complete
+ * one, which is the only lever that improves both sides at once: fewer cells
+ * needing revision means fewer figures that are wrong and fewer occasions to
+ * consider disclosing a correction.
+ *
+ * Ninety days is a publication-policy decision rather than a derived one. It is
+ * roughly the observed tail of late admission and it is a quarter, so a period
+ * is published as the next one closes and the cadence stays legible. It is
+ * stated here as a number with its reasoning rather than left implicit, because
+ * the cost of changing it is borne by whoever reads a figure, and a settling
+ * period nobody wrote down becomes a coincidence of when the job happened to
+ * run.
+ */
+const SETTLING_PERIOD_DAYS = 90;
+
 const publicAggregateSchema = new mongoose.Schema(
     {
         // What the cell groups by. Recipient and period only: adding donor
@@ -205,4 +235,5 @@ module.exports = {
     BUILDING_COLLECTION,
     MIN_DONORS_PER_CELL,
     AMOUNT_ROUNDING_IDR,
+    SETTLING_PERIOD_DAYS,
 };

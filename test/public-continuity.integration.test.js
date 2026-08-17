@@ -31,6 +31,7 @@ const {
     PublicDatasetBuild,
     BUILDING_COLLECTION,
     MIN_DONORS_PER_CELL,
+    SETTLING_PERIOD_DAYS,
 } = require('../app/domains/public/public.model');
 const controller = require('../app/domains/public/public.controller');
 const scheduler = require('../app/domains/public/public.scheduler');
@@ -38,9 +39,39 @@ const { normaliseName } = require('../app/domains/canonical/resolution');
 
 useDatabase();
 
-//: A quarter that has closed. Only closed quarters are published, so a fixture
-//: dated in the quarter in progress produces no cells and would test nothing.
-const CLOSED_QUARTER_DAY = new Date('2026-05-05T00:00:00Z');
+/**
+ * A day inside a quarter that has both closed and settled.
+ *
+ * Only settled quarters are published, so a fixture dated in the quarter in
+ * progress — or in one that closed recently — produces no cells and would test
+ * nothing while passing.
+ *
+ * Computed rather than written down, because these cases build with the real
+ * clock. A fixed date works until the settling period changes or enough time
+ * passes, and the way it stops working is that the tests keep passing against
+ * an empty dataset. That is the failure this whole file exists to catch, so it
+ * is the one it must not have.
+ */
+function settledQuarterDay(now = new Date()) {
+    const quarterStart = new Date(
+        Date.UTC(now.getUTCFullYear(), Math.floor(now.getUTCMonth() / 3) * 3, 1),
+    );
+    for (;;) {
+        quarterStart.setUTCMonth(quarterStart.getUTCMonth() - 3);
+        const endsAt = Date.UTC(
+            quarterStart.getUTCFullYear(),
+            quarterStart.getUTCMonth() + 3,
+            1,
+        );
+        if (now.getTime() - endsAt >= SETTLING_PERIOD_DAYS * 24 * 60 * 60 * 1000) {
+            return new Date(
+                Date.UTC(quarterStart.getUTCFullYear(), quarterStart.getUTCMonth(), 15),
+            );
+        }
+    }
+}
+
+const CLOSED_QUARTER_DAY = settledQuarterDay();
 
 function reply() {
     const sent = {};

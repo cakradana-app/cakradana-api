@@ -20,6 +20,7 @@ const {
     BUILDING_COLLECTION,
     MIN_DONORS_PER_CELL,
     AMOUNT_ROUNDING_IDR,
+    SETTLING_PERIOD_DAYS,
 } = require('./public.model');
 const { log } = require('../../utils/observability/logging');
 
@@ -56,17 +57,34 @@ function periodOf(date) {
  * deal. `revisionPending` marks that cell, so it is not silent, but nothing
  * resolves it.
  *
- * That is a real cost and it is not currently traded away, because the two
- * constraints genuinely conflict: a figure that may be revised cannot be
- * republished without the revision disclosing what changed, and a figure that
- * may not be revised is wrong whenever the data arrives after it. A settling
- * period between a quarter closing and its first publication would not remove
- * the conflict but would make the frozen figures much likelier to be the
- * complete ones. Choosing that period is a publication-policy decision rather
- * than a technical one, and nothing here should pick a number for it.
+ * The two constraints genuinely conflict: a figure that may be revised cannot
+ * be republished without the revision disclosing what changed, and a figure
+ * that may not be revised is wrong whenever the data arrives after it. What
+ * resolves neither but improves both is waiting, so a quarter is not published
+ * until `SETTLING_PERIOD_DAYS` after it closed. Fewer cells need revision,
+ * which means both fewer wrong figures and fewer occasions to weigh disclosing
+ * a correction.
+ *
+ * Two conditions, not one, and the second is the one that took a policy
+ * decision: the period has ended, and enough time has passed since it ended.
  */
+function periodEndedAt(period) {
+    // The instant the following quarter begins, which is the first moment no
+    // further donation can fall inside this one.
+    //
+    // Q4 needs no special case: `Date.UTC` normalises month 12 into January of
+    // the following year, which is the answer. It was written with one, and
+    // removing it changed nothing that any test could see — a branch that
+    // cannot be made to fail is not a safeguard, it is a second description of
+    // the same behaviour that a later reader has to reconcile.
+    const [year, quarter] = period.split('-Q').map(Number);
+    return Date.UTC(year, quarter * 3, 1);
+}
+
 function periodIsClosed(period, now) {
-    return period < periodOf(now);
+    if (period >= periodOf(now)) return false;
+    const settled = periodEndedAt(period) + SETTLING_PERIOD_DAYS * 24 * 60 * 60 * 1000;
+    return new Date(now).getTime() >= settled;
 }
 
 function round(amount) {

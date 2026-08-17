@@ -1451,7 +1451,7 @@ paths:
         - Public
       summary: Published donation aggregates
       description: |
-        Covers **closed quarters only**. The quarter in progress is not
+        Covers **settled quarters only**. The quarter in progress is not
         published at all: its figures change with every donation admitted, and
         an observer polling across releases watches a cell gain one donor and
         one amount, which discloses that donation to within the rounding
@@ -1462,6 +1462,17 @@ paths:
         When the records behind a cell change, the published figures stay and
         the cell reports `revision_pending`, so a reader is not shown a changed
         number with no way to tell it changed.
+
+        A quarter closing is therefore not enough on its own. Ingestion is
+        asynchronous — paper forms are OCR'd and admitted well after the fact —
+        so the first build after a quarter closed would freeze whatever had
+        arrived by then, and a recipient whose donors' forms were still being
+        processed would be published as suppressed and stay that way, reporting
+        no donors for a quarter in which it received a great deal. A quarter is
+        published 90 days after it ends, by which point the frozen figures are
+        much likelier to be the complete ones. The most recent one or two
+        quarters are consequently absent, and that is the intended state rather
+        than a gap in the data.
 
         `period` must be a quarter (`YYYY-Qn`) and `electoral_context` a plain
         label. Both are validated rather than passed through: this is the one

@@ -54,6 +54,14 @@ async function makeEntity(name, type = 'individual') {
     });
 }
 
+//: A build date at which 2026-Q2 has both closed and settled. A quarter is not
+//: published until the settling period has elapsed since it ended, because
+//: ingestion is asynchronous and the first build after a quarter closes would
+//: otherwise freeze whatever had happened to arrive by then. Every case below
+//: is about what gets published, not about when, so each one builds from a date
+//: at which its fixtures are publishable.
+const AFTER_SETTLING = new Date('2026-10-01T00:00:00Z');
+
 async function donate(sender, receiver, amountIdr, index) {
     return Donation.create({
         senderRef: { entityId: sender._id, rawText: sender.canonicalName },
@@ -84,7 +92,7 @@ async function serve(query = {}) {
 
 test('a cell above the threshold is published', async () => {
     await cellWith(MIN_DONORS_PER_CELL);
-    await controller.materialise();
+    await controller.materialise({ now: AFTER_SETTLING });
 
     const sent = await serve();
     assert.equal(sent.status, 200);
@@ -99,7 +107,7 @@ test('a cell below the threshold publishes no figures at all', async () => {
     // from 2 donors" alongside a known large donation identifies the second by
     // arithmetic, which is the ordinary way aggregate releases leak.
     await cellWith(MIN_DONORS_PER_CELL - 1, 600_000_000);
-    await controller.materialise();
+    await controller.materialise({ now: AFTER_SETTLING });
 
     const sent = await serve();
     const cell = sent.body.data.cells[0];
@@ -116,7 +124,7 @@ test('a suppressed cell holds no true count anywhere in the collection', async (
     // the published dataset, and the design only works if everything in it is
     // publishable without somebody having to remember which fields are not.
     await cellWith(MIN_DONORS_PER_CELL - 1, 600_000_000);
-    await controller.materialise();
+    await controller.materialise({ now: AFTER_SETTLING });
 
     const stored = await PublicAggregate.findOne({ suppressed: true }).lean();
     assert.ok(stored, 'the suppressed cell was omitted rather than published as suppressed');
@@ -135,7 +143,7 @@ test('a suppressed cell is published as suppressed, not omitted', async () => {
     // A cell that vanishes reads as an absence of donations rather than an
     // absence of publishable detail.
     await cellWith(MIN_DONORS_PER_CELL - 1);
-    const summary = await controller.materialise();
+    const summary = await controller.materialise({ now: AFTER_SETTLING });
     assert.equal(summary.cells, 1);
     assert.equal(summary.suppressed, 1);
     assert.equal(summary.published, 0);
@@ -148,7 +156,7 @@ test('an operator in a query parameter is refused rather than run', async () => 
     // The one route with no token in front of it. Express parses
     // `?period[$ne]=x` into an object, which reaches mongoose as an operator.
     await cellWith(MIN_DONORS_PER_CELL);
-    await controller.materialise();
+    await controller.materialise({ now: AFTER_SETTLING });
 
     for (const period of [{ $ne: null }, { $regex: '(a+)+$' }, ['2026-Q2'], 5]) {
         const sent = await serve({ period });
@@ -166,7 +174,7 @@ test('an operator in the electoral context is refused too', async () => {
 test('a well-formed period still filters', async () => {
     // The refusal above is only correct if the legitimate form still works.
     await cellWith(MIN_DONORS_PER_CELL);
-    await controller.materialise();
+    await controller.materialise({ now: AFTER_SETTLING });
 
     const matching = await serve({ period: '2026-Q2' });
     assert.equal(matching.status, 200);
@@ -188,7 +196,7 @@ test('an unresolved recipient is not published under whatever a scanner read', a
         channel: 'paper-form',
         dedupKey: 'unresolved-1',
     });
-    await controller.materialise();
+    await controller.materialise({ now: AFTER_SETTLING });
 
     assert.equal(await PublicAggregate.countDocuments({}), 0);
 });
@@ -207,7 +215,7 @@ test('a corrected record is not published beside its correction', async () => {
         supersededBy: superseding._id,
     });
 
-    await controller.materialise();
+    await controller.materialise({ now: AFTER_SETTLING });
     const cell = await PublicAggregate.findOne({ suppressed: false }).lean();
     assert.equal(cell.donationCount, MIN_DONORS_PER_CELL);
 });
@@ -216,8 +224,8 @@ test('the build replaces rather than accumulates', async () => {
     // An incremental build that misses a deletion leaves a published figure for
     // a record that has since been corrected or withdrawn.
     await cellWith(MIN_DONORS_PER_CELL);
-    await controller.materialise();
-    await controller.materialise();
+    await controller.materialise({ now: AFTER_SETTLING });
+    await controller.materialise({ now: AFTER_SETTLING });
     assert.equal(await PublicAggregate.countDocuments({}), 1);
 });
 
@@ -225,7 +233,7 @@ test('the response says what it excludes and when it was built', async () => {
     // An aggregate with no date attached gets quoted years later as though it
     // were current, and a reader has no other way to know what is missing.
     await cellWith(MIN_DONORS_PER_CELL);
-    await controller.materialise();
+    await controller.materialise({ now: AFTER_SETTLING });
 
     const sent = await serve();
     assert.ok(sent.body.data.materialised_at);
@@ -236,7 +244,7 @@ test('the response says what it excludes and when it was built', async () => {
 
 test('no served cell carries a score, band, or flag under any name', async () => {
     await cellWith(MIN_DONORS_PER_CELL);
-    await controller.materialise();
+    await controller.materialise({ now: AFTER_SETTLING });
 
     const sent = await serve();
     // Matched on the cells rather than on the whole envelope, and on words
@@ -260,7 +268,7 @@ test('no served cell carries a score, band, or flag under any name', async () =>
 
 test('the operations view counts without naming anybody', async () => {
     await cellWith(MIN_DONORS_PER_CELL);
-    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+    await controller.materialise({ now: new Date('2026-10-01T00:00:00Z') });
 
     const res = reply();
     await controller.operations({ query: {} }, res);
@@ -288,7 +296,7 @@ test('the quarter in progress is not published', async () => {
     assert.equal(await PublicAggregate.countDocuments({}), 0);
 
     // And a clock past it makes the same quarter publishable.
-    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+    await controller.materialise({ now: new Date('2026-10-01T00:00:00Z') });
     assert.equal(await PublicAggregate.countDocuments({}), 1);
 });
 
@@ -296,7 +304,7 @@ test('a published figure is not revised in place', async () => {
     // Republishing a revised figure is a second observation of one cell, and
     // the difference between the two is exactly what an observer differences.
     const party = await cellWith(MIN_DONORS_PER_CELL);
-    const later = new Date('2026-08-01T00:00:00Z');
+    const later = new Date('2026-10-01T00:00:00Z');
     await controller.materialise({ now: later });
 
     const first = await PublicAggregate.findOne({}).lean();
@@ -307,7 +315,7 @@ test('a published figure is not revised in place', async () => {
     // A sixth donor arrives for the same closed quarter.
     const extra = await makeEntity('Donor extra');
     await donate(extra, party, 250_000_000, 'extra-1');
-    await controller.materialise({ now: new Date('2026-08-02T00:00:00Z') });
+    await controller.materialise({ now: new Date('2026-10-02T00:00:00Z') });
 
     const again = await PublicAggregate.findOne({}).lean();
     assert.equal(
@@ -326,7 +334,7 @@ test('a published figure is not revised in place', async () => {
 
 test('the response says the current quarter is absent by design', async () => {
     await cellWith(MIN_DONORS_PER_CELL);
-    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+    await controller.materialise({ now: new Date('2026-10-01T00:00:00Z') });
     const sent = await serve();
     assert.match(sent.body.data.covers, /closed quarters only/);
 });
@@ -345,7 +353,7 @@ test('the operations figures come from the build, not from a live count', async 
     // Distinguished from a system holding nothing, which zeroes would claim.
     assert.match(before.sent.body.data.reason, /has not been built/);
 
-    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+    await controller.materialise({ now: new Date('2026-10-01T00:00:00Z') });
 
     const after = reply();
     await controller.operations({ query: {} }, after);
@@ -372,7 +380,7 @@ test('an upheld rate over no disputes is unmeasured, not zero', async () => {
     // Reporting zero would claim nothing has ever been contested successfully,
     // which is a different and more flattering statement.
     await cellWith(MIN_DONORS_PER_CELL);
-    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+    await controller.materialise({ now: new Date('2026-10-01T00:00:00Z') });
 
     const res = reply();
     await controller.operations({ query: {} }, res);
@@ -386,13 +394,13 @@ test('a rebuild never leaves the operations figures reporting unbuilt', async ()
     // "the dataset has not been built" — false at that moment, because it had
     // been built and was being rebuilt. One atomic write closes it.
     await cellWith(MIN_DONORS_PER_CELL);
-    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+    await controller.materialise({ now: new Date('2026-10-01T00:00:00Z') });
     assert.equal(await PublicOperations.countDocuments({}), 1);
 
     // Rebuild repeatedly; there must never be a moment with no record, and
     // never more than one.
     for (let round = 0; round < 5; round += 1) {
-        await controller.materialise({ now: new Date(`2026-08-0${round + 2}T00:00:00Z`) });
+        await controller.materialise({ now: new Date(`2026-10-0${round + 2}T00:00:00Z`) });
         assert.equal(
             await PublicOperations.countDocuments({}),
             1,
@@ -409,7 +417,7 @@ test('the collection cannot hold two operations records', async () => {
     // The replace targets a constant key. The index is what makes "at most one"
     // a guarantee rather than something the writer is trusted to maintain.
     await cellWith(MIN_DONORS_PER_CELL);
-    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+    await controller.materialise({ now: new Date('2026-10-01T00:00:00Z') });
 
     await assert.rejects(
         () =>
@@ -438,7 +446,7 @@ test('an empty answer says which of the four causes it is', async () => {
     // A healthy dataset whose filter matched nothing is a different answer, and
     // the state alone cannot express it.
     await cellWith(MIN_DONORS_PER_CELL);
-    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+    await controller.materialise({ now: new Date('2026-10-01T00:00:00Z') });
 
     const filteredOut = await serve({ period: '2020-Q1' });
     assert.equal(filteredOut.body.data.cells.length, 0);
@@ -450,7 +458,7 @@ test('the build date survives a filter that matches nothing', async () => {
     // Taken from the first cell it was null whenever the list was empty,
     // including for a healthy dataset, which reads as never built.
     await cellWith(MIN_DONORS_PER_CELL);
-    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+    await controller.materialise({ now: new Date('2026-10-01T00:00:00Z') });
 
     const empty = await serve({ period: '2020-Q1' });
     assert.ok(
@@ -472,7 +480,7 @@ test('a merge does not release the difference as a new cell', async () => {
         const donor = await makeEntity(`Donor ${index}`);
         await donate(donor, party, 10_000_000, `merge-${index}`);
     }
-    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+    await controller.materialise({ now: new Date('2026-10-01T00:00:00Z') });
 
     const first = await PublicAggregate.findOne({}).lean();
     assert.equal(first.donorCount, MIN_DONORS_PER_CELL);
@@ -493,7 +501,7 @@ test('a merge does not release the difference as a new cell', async () => {
     );
     await Entity.updateOne({ _id: party._id }, { $set: { mergedInto: survivor._id } });
 
-    await controller.materialise({ now: new Date('2026-08-02T00:00:00Z') });
+    await controller.materialise({ now: new Date('2026-10-02T00:00:00Z') });
 
     const cells = await PublicAggregate.find({}).lean();
     assert.equal(cells.length, 1, 'the merge produced a second cell');
@@ -524,7 +532,7 @@ test('a published cell whose donations all vanish is frozen, not deleted', async
         const donor = await makeEntity(`Other donor ${index}`);
         await donate(donor, staying, 10_000_000, `stay-${index}`);
     }
-    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+    await controller.materialise({ now: new Date('2026-10-01T00:00:00Z') });
     assert.equal(await PublicAggregate.countDocuments({}), 2);
 
     // Every donation to one recipient corrected away.
@@ -533,7 +541,7 @@ test('a published cell whose donations all vanish is frozen, not deleted', async
         { 'receiverRef.entityId': going._id },
         { $set: { supersededBy: superseding._id } },
     );
-    await controller.materialise({ now: new Date('2026-08-02T00:00:00Z') });
+    await controller.materialise({ now: new Date('2026-10-02T00:00:00Z') });
 
     const names = (await PublicAggregate.find({}).lean()).map((c) => c.recipientName);
     assert.ok(
@@ -554,17 +562,110 @@ test('the endpoint says how many published figures no longer match the records',
     // arriving — marked, but never resolved. Per-cell that is easy to miss;
     // as a count it is the figure worth watching.
     const party = await cellWith(MIN_DONORS_PER_CELL);
-    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z') });
+    await controller.materialise({ now: new Date('2026-10-01T00:00:00Z') });
     const before = await serve();
     assert.equal(before.body.data.cells_pending_revision, 0);
 
     const late = await makeEntity('Donor late');
     await donate(late, party, 250_000_000, 'pending-1');
-    await controller.materialise({ now: new Date('2026-08-02T00:00:00Z') });
+    await controller.materialise({ now: new Date('2026-10-02T00:00:00Z') });
 
     const after = await serve();
     assert.equal(after.body.data.cells_pending_revision, 1);
     // And the figure itself did not move, which is the point.
     assert.equal(after.body.data.cells[0].donors, MIN_DONORS_PER_CELL);
     assert.equal(after.body.data.cells[0].revision_pending, true);
+});
+
+/**
+ * The settling period, which is the reason a closed quarter is not enough.
+ *
+ * A published figure is frozen: republishing a revised one lets an observer
+ * difference the two and recover what changed, which for a cell that gains a
+ * donor is that donor's donation, to the rupiah, against a named recipient. The
+ * freeze rested on a claim that a closed quarter does not move, and that claim
+ * is false here by design — ingestion is asynchronous, paper forms are admitted
+ * well after the fact, and the scoring sweeper exists because records arrive
+ * late.
+ *
+ * So the first build after a quarter closed used to freeze whatever had arrived
+ * by then. A recipient whose donors' forms were still in the queue was
+ * published as suppressed and stayed suppressed, reporting no donors for a
+ * quarter in which it received a great deal. Waiting does not resolve the
+ * conflict, but it makes the frozen figure much likelier to be the complete
+ * one.
+ */
+test('a quarter that has closed but not settled is not published', async () => {
+    await cellWith(MIN_DONORS_PER_CELL);
+
+    // 2026-Q2 ended on the first of July. This is a month after that: closed by
+    // the old rule, and the date at which every case above used to build.
+    await controller.materialise({ now: new Date('2026-08-01T00:00:00Z'), allowEmpty: true });
+    assert.equal((await serve()).body.data.cells.length, 0);
+
+    // The day before it settles, and the day it does.
+    await controller.materialise({ now: new Date('2026-09-28T00:00:00Z'), allowEmpty: true });
+    assert.equal((await serve()).body.data.cells.length, 0);
+
+    await controller.materialise({ now: new Date('2026-09-29T12:00:00Z') });
+    const settled = await serve();
+    assert.equal(settled.body.data.cells.length, 1);
+    assert.equal(settled.body.data.cells[0].period, '2026-Q2');
+});
+
+test('the settling period is counted from the end of the quarter, not the donation', async () => {
+    // Two donations in the same quarter, seven weeks apart. They settle
+    // together, because what settles is the period. Counting from each
+    // donation would publish the earlier half of a quarter while the later
+    // half was still arriving — which is the same disclosure as publishing an
+    // open quarter, reached by a different route.
+    const party = await makeEntity('Partai Maju', 'political-party');
+    for (let index = 0; index < MIN_DONORS_PER_CELL; index += 1) {
+        const donor = await makeEntity(`Donor ${index}`);
+        await Donation.create({
+            senderRef: { entityId: donor._id, rawText: donor.canonicalName },
+            receiverRef: { entityId: party._id, rawText: party.canonicalName },
+            amountIdr: 10_000_000,
+            occurredAt: new Date(index === 0 ? '2026-04-10T00:00:00Z' : '2026-06-05T00:00:00Z'),
+            recordedAt: new Date('2026-06-05T00:00:00Z'),
+            channel: 'digital-form',
+            dedupKey: `settle-${index}`,
+        });
+    }
+
+    // Ninety days after the earliest donation, and still inside the period's
+    // own settling window.
+    await controller.materialise({ now: new Date('2026-07-10T00:00:00Z'), allowEmpty: true });
+    assert.equal((await serve()).body.data.cells.length, 0);
+
+    await controller.materialise({ now: new Date('2026-09-29T12:00:00Z') });
+    const cells = (await serve()).body.data.cells;
+    assert.equal(cells.length, 1);
+    assert.equal(cells[0].donors, MIN_DONORS_PER_CELL);
+});
+
+test('a quarter that ends the year settles into the next one', async () => {
+    // The rollover, which is the arithmetic most likely to be wrong: Q4 ends on
+    // the first of January of the following year, not the first of October.
+    const party = await makeEntity('Partai Akhir', 'political-party');
+    for (let index = 0; index < MIN_DONORS_PER_CELL; index += 1) {
+        const donor = await makeEntity(`Penyumbang ${index}`);
+        await Donation.create({
+            senderRef: { entityId: donor._id, rawText: donor.canonicalName },
+            receiverRef: { entityId: party._id, rawText: party.canonicalName },
+            amountIdr: 10_000_000,
+            occurredAt: new Date('2026-11-20T00:00:00Z'),
+            recordedAt: new Date('2026-11-20T00:00:00Z'),
+            channel: 'digital-form',
+            dedupKey: `year-end-${index}`,
+        });
+    }
+
+    await controller.materialise({ now: new Date('2027-03-01T00:00:00Z'), allowEmpty: true });
+    assert.equal((await serve()).body.data.cells.length, 0);
+
+    await controller.materialise({ now: new Date('2027-04-01T00:00:00Z') });
+    const cells = (await serve()).body.data.cells;
+    assert.equal(cells.length, 1);
+    assert.equal(cells[0].period, '2026-Q4');
 });
