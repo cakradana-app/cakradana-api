@@ -9,7 +9,7 @@ the two differ, the code is what runs.
 
 | | Target | Why this number |
 |---|---|---|
-| **Availability** | 99.5% of a calendar month, measured on the ingestion write path and the review queue (about 3h39m of budget) | One MongoDB process and one API container. Every restart, host reboot, and database upgrade is downtime rather than a failover. The work this serves — filings arriving in batches, a queue worked by people in business hours — is not harmed by minutes of unavailability the way a payment authorisation would be. |
+| **Availability** | 99.5% of a calendar month, measured on the ingestion write path and the review queue (216 minutes of budget in a 30-day month) | One MongoDB process and one API container. Every restart, host reboot, and database upgrade is downtime rather than a failover. The work this serves — filings arriving in batches, a queue worked by people in business hours — is not harmed by minutes of unavailability the way a payment authorisation would be. |
 | **RPO** | 6 hours | This is a full-dump deployment with no continuous capture, so the worst-case loss is exactly the interval between dumps. A lost donation is not a missing row: every cumulative rule computes over the donations it can see, so losing one *lowers* a donor's running total, an over-limit donor is cleared by the limit rules, and nothing anywhere reports an error. |
 | **RTO** | 4 hours | Recovery is a manual procedure: somebody is paged, a database is provisioned, `scripts/restore.js` runs, and its verification is read. At this data volume the restore itself is minutes — the hours are people and provisioning. |
 
