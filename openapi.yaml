@@ -1178,6 +1178,188 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /service/notifications:
+    get:
+      tags:
+        - Notifications
+      summary: Notices awaiting a human decision
+      description: |
+        A donation whose scoring produced statutory findings, or a high
+        behavioural band, raises the question of whether the attributed party
+        should be told. It is only a question: nothing is sent by the system,
+        and a person decides both ways.
+
+        The response states whether this deployment can deliver notices at all,
+        because a queue of approved-but-undelivered notices means something
+        different from a queue with nothing to send.
+      parameters:
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [pending_decision, approved, withheld, delivered, failed]
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+      responses:
+        '200':
+          description: Notification candidates
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/notifications/preview/{notificationId}:
+    get:
+      tags:
+        - Notifications
+      summary: The notice as the subject would receive it
+      description: |
+        Readable before the decision rather than after it. Approving a notice
+        without being able to read it is approval in name.
+
+        The notice carries what was observed, the source it was read from, the
+        statutory findings with their articles, and the route to contest. It
+        carries no behavioural score: an estimate that ranks donations for
+        review says nothing the system has standing to put to the person it
+        concerns.
+      parameters:
+        - name: notificationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Composed notice
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such notification
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/notifications/decide:
+    post:
+      tags:
+        - Notifications
+      summary: Decide whether to tell the subject
+      description: |
+        Both outcomes are decisions and both are recorded with the name of
+        whoever made them. Withholding is the one that most needs a record: a
+        notice never sent leaves no trace of its own absence.
+
+        Notification that would prejudice an active investigation is a
+        legitimate reason to withhold, and is recorded as that reason rather
+        than left as a silent gap.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationDecisionRequest'
+      responses:
+        '200':
+          description: Decision recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request, or no person identified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such notification
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Already decided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /service/notifications/deliver:
+    post:
+      tags:
+        - Notifications
+      summary: Send an approved notice
+      description: |
+        Refuses with 503 when delivery is disabled for this deployment, rather
+        than reporting success for something that did not happen. A caller
+        treating "recorded" as "sent" would leave a subject believing they had
+        been told.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [notification_id, to]
+              properties:
+                notification_id:
+                  type: string
+                to:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Delivered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Not approved for delivery
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Subject notification is disabled in this deployment
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
 components:
   securitySchemes:
     BearerAuth:
@@ -1282,6 +1464,31 @@ components:
             What the subject says the record should say instead. Optional: a
             subject who knows an attribution is wrong is not obliged to know
             what the right answer is.
+
+    NotificationDecisionRequest:
+      type: object
+      required:
+        - notification_id
+        - notify
+      properties:
+        notification_id:
+          type: string
+        notify:
+          type: boolean
+        withholding_reason:
+          type: string
+          enum:
+            - active_investigation
+            - no_contact_route
+            - subject_unresolved
+            - duplicate_of_earlier_notice
+            - other
+          nullable: true
+          description: Required when `notify` is false
+        detail:
+          type: string
+          nullable: true
+          description: Required when the reason is `other`
 
     DisputeResolutionRequest:
       type: object
@@ -1655,6 +1862,11 @@ tags:
     description: Web scraping and AI-powered donation data extraction
   - name: Donation Management
     description: Donation and entity data retrieval and management
+  - name: Notifications
+    description: |
+      Deciding whether to tell a subject that a donation attributed to them has
+      been flagged, and recording the decision either way. Delivery is disabled
+      unless the deployment enables it.
   - name: Disputes
     description: |
       Contesting an attribution, and adjudicating the contest. Donations enter

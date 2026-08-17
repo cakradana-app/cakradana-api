@@ -111,7 +111,7 @@ async function post(path, body, timeoutMs = DEFAULT_TIMEOUT_MS) {
  * subject contesting a score can see the score they are contesting.
  */
 async function recordEvent(donation, result, rescoreReason = null) {
-    return ScoringEvent.create({
+    const event = await ScoringEvent.create({
         donationId: donation._id,
         donationVersion: donation.donationVersion || 1,
         scoredAt: result.scored_at ? new Date(result.scored_at) : new Date(),
@@ -123,6 +123,22 @@ async function recordEvent(donation, result, rescoreReason = null) {
         behavioural: result.behavioural || null,
         rescoreReason,
     });
+
+    // Queue the question of whether the attributed party should be told. It is
+    // only a candidate: nothing is sent, and a person decides both ways. Raised
+    // here rather than in each ingestion channel so that a donation scored by
+    // any route reaches the same decision.
+    try {
+        const { raiseCandidate } = require('../../domains/services/notifications/notification.controller');
+        await raiseCandidate(donation, event);
+    } catch (error) {
+        // Never allowed to fail the scoring write. A missing notice candidate
+        // is a gap in a queue somebody works through; a lost scoring event is
+        // a donation nobody ever evaluated.
+        console.error('Could not raise a notification candidate:', error.message);
+    }
+
+    return event;
 }
 
 async function scoreDonation(donation, { requestId = null } = {}) {

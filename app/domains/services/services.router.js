@@ -12,11 +12,13 @@ const paperFormRouter = require('./paper-form/paper.router');
 const webScrapeRouter = require('./web-scrape/scrape.router');
 const donationRouter = require('./donations/donation.router');
 const disputeRouter = require('./disputes/dispute.router');
+const notificationRouter = require('./notifications/notification.router');
 
 serviceRouter.use('/digital-form', digitalFormRouter);
 serviceRouter.use('/paper-form', paperFormRouter);
 serviceRouter.use('/web-scrape', webScrapeRouter);
 serviceRouter.use('/donations', donationRouter);
 serviceRouter.use('/disputes', disputeRouter);
+serviceRouter.use('/notifications', notificationRouter);
 
 module.exports = serviceRouter;
