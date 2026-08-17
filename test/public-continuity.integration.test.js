@@ -286,6 +286,51 @@ test('a failed build is recorded, not only logged', async () => {
     assert.match(builds[1].error, /simulated crash mid-build/);
 });
 
+test('the aggregates endpoint says why its own list is empty', async () => {
+    // The route with no token in front of it, and therefore the one where a
+    // reader has no second endpoint to consult. An empty `cells` has four
+    // causes and the list cannot tell them apart.
+    //
+    // Driven through the scheduler rather than through `materialise` directly,
+    // which is what reaches the two causes a direct build cannot produce: a
+    // build that ran and found nothing, and a dataset still being served while
+    // its rebuilds fail. Both need the build journal, and only the scheduler
+    // writes it.
+    const never = await serve();
+    assert.equal(never.body.data.cells.length, 0);
+    assert.equal(never.body.data.published_dataset.state, 'never-built');
+    assert.equal(never.body.data.filtered, false);
+
+    // A build ran and found nothing publishable, which is not the same thing.
+    await scheduler.runOnce();
+    const empty = await serve();
+    assert.equal(empty.body.data.published_dataset.state, 'built-and-empty');
+    assert.ok(empty.body.data.published_dataset.built_at);
+
+    // A dataset that is fine, and a filter that matched nothing. This is the
+    // cause the state alone cannot express.
+    await publishableCell();
+    await scheduler.runOnce();
+    const unmatched = await serve({ period: '2020-Q1' });
+    assert.equal(unmatched.body.data.cells.length, 0);
+    assert.equal(unmatched.body.data.published_dataset.state, 'published');
+    assert.equal(unmatched.body.data.filtered, true);
+
+    // And figures still being served while the rebuilds fail say so.
+    const restore = interceptStagingWrite(async () => {
+        throw new Error('simulated crash mid-build');
+    });
+    try {
+        await scheduler.runOnce();
+    } finally {
+        restore();
+    }
+    const stale = await serve();
+    assert.equal(stale.body.data.cells.length, 1);
+    assert.equal(stale.body.data.published_dataset.last_build_outcome, 'failed');
+    assert.match(stale.body.data.published_dataset.note, /are not current/);
+});
+
 test('the published state distinguishes never built, built and empty, and stale', async () => {
     // `/public/aggregates` answers with a list of cells, and an empty list has
     // three quite different causes. The endpoint cannot tell them apart from the
