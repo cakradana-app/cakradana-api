@@ -664,3 +664,81 @@ test('a read that cannot be completed is still recorded', async () =>
         assert.equal(attempt.actor, ACTOR);
         assert.match(attempt.reason, /could not be authenticated/);
     }));
+
+/**
+ * The read path has to make the same refusal the write path does.
+ *
+ * Every placeholder normalises to the same short string and therefore to the
+ * same lookup hash, so a lookup for `"-"` is a query for whoever else was ever
+ * recorded with a dash. `mint` has refused those since the collision was found,
+ * which made the read path look safe by association — but the records that
+ * check was added to stop still exist wherever it was added after the fact, and
+ * a migration leaves exactly that population behind.
+ */
+test('a placeholder is refused as a lookup, not answered with whoever else holds one', async () =>
+    withSecrets(async () => {
+        const legacy = await makeEntity('Recorded Before The Check');
+        // Written straight to the collection, which is how the records this
+        // guards against got there: `mint` would refuse this today.
+        await EntityIdentifier.create({
+            valueRef: `idref_${'c'.repeat(32)}`,
+            entityId: legacy._id,
+            scheme: 'nik',
+            lookupHash: lookupHash('nik', 'N/A'),
+            ...encrypt('N/A', { valueRef: `idref_${'c'.repeat(32)}`, scheme: 'nik' }),
+            recordedBy: 'a migration',
+        });
+
+        const res = reply();
+        await controller.match(
+            { body: { scheme: 'nik', value: 'N/A' }, user: { email: ACTOR } },
+            res,
+        );
+
+        assert.equal(res.sent.status, 400);
+        assert.match(res.sent.body.message, /fewer than \d+ identifying characters/);
+        // The entity holding the placeholder is not named. Answering this
+        // lookup would report an unrelated party as the holder of the caller's
+        // identifier, which is the strongest evidence this system produces.
+        assert.equal(
+            JSON.stringify(res.sent.body).includes(String(legacy._id)),
+            false,
+            'a refused lookup disclosed who holds the placeholder',
+        );
+
+        // Refused, and still recorded: a caller working through placeholders to
+        // see which the system accepts does so one request at a time, and a 400
+        // that leaves no trace makes that sequence invisible.
+        const logged = await AuditEntry.findOne({ action: 'match-identifier' }).lean();
+        assert.ok(logged, 'a refused lookup wrote no audit entry');
+        assert.equal(logged.outcome, 'denied');
+        assert.equal(logged.subjectId, null);
+    }));
+
+test('a lookup that is short for its scheme is refused before it is hashed', async () =>
+    withSecrets(async () => {
+        const res = reply();
+        await controller.match(
+            { body: { scheme: 'nik', value: '31740125' }, user: { email: ACTOR } },
+            res,
+        );
+        assert.equal(res.sent.status, 400);
+        assert.match(res.sent.body.message, /does not have the form of a nik/);
+    }));
+
+test('a real value is still matched', async () =>
+    withSecrets(async () => {
+        // The other side of the refusal, without which the two tests above pass
+        // against a `match` that refuses everything.
+        const entity = await makeEntity();
+        await mint({ entity_id: String(entity._id), scheme: 'nik', value: NIK });
+
+        const res = reply();
+        await controller.match(
+            { body: { scheme: 'nik', value: NIK }, user: { email: ACTOR } },
+            res,
+        );
+        assert.equal(res.sent.status, 200);
+        assert.equal(res.sent.body.data.known, true);
+        assert.equal(String(res.sent.body.data.entity_id), String(entity._id));
+    }));

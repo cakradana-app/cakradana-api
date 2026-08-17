@@ -173,6 +173,12 @@ const mint = async (req, res) => {
             // into the same answer the check gives.
             if (err?.code === 11000) {
                 const other = await EntityIdentifier.findOne({ scheme, lookupHash: hash }).lean();
+                // The race can be lost to this same entity — an operator
+                // double-submitting, a client retrying a request whose response
+                // was lost. That is the case the non-racing path above answers
+                // with 200 and `created: false`, and answering it with 409
+                // instead told the operator to resolve the entity against
+                // itself: a decision with no second party to make it about.
                 return fail(
                     res,
                     409,
@@ -239,6 +245,35 @@ const match = async (req, res) => {
             return fail(res, 400, `scheme must be one of: ${IDENTIFIER_SCHEMES.join(', ')}`);
         }
         if (!value) return fail(res, 400, 'value is required');
+        try {
+            // The same check `mint` applies, for the same reason and against a
+            // population `mint` cannot reach. Every placeholder normalises to
+            // the same short string and therefore to the same lookup hash, so
+            // `{scheme: 'nik', value: '-'}` is a query for "whoever else was
+            // recorded with a dash" — and any record predating that check on
+            // the write path is exactly what it would find. A migration leaves
+            // precisely that population behind, so the read path cannot assume
+            // the write path already cleaned it.
+            validateValue(scheme, value);
+        } catch (err) {
+            if (err instanceof IdentifierRejected) {
+                // Recorded, not merely refused. A caller working through
+                // placeholders to see which the system accepts is doing so one
+                // request at a time, and a 400 that leaves no trace makes that
+                // sequence invisible — which is the pattern this log exists to
+                // show.
+                await record({
+                    actor,
+                    action: 'match-identifier',
+                    subjectType: 'EntityIdentifier',
+                    subjectId: null,
+                    outcome: 'denied',
+                    reason: `${scheme} lookup refused: not an identifier`,
+                });
+                return fail(res, 400, err.message);
+            }
+            throw err;
+        }
 
         const found = await EntityIdentifier.findOne({
             scheme,
