@@ -344,3 +344,38 @@ test('the reviewer list excludes superseded records and reports the store', asyn
     assert.equal(res.sent.status, 200);
     assert.equal(res.sent.body.data.length, 1);
 });
+
+test('a capped list says it was capped', async () => {
+    // A capped list that does not say so reads as the complete set, and the
+    // reader with most to lose from that is the subject: somebody checking
+    // which donations are attributed to them would conclude the ones past the
+    // cap do not exist.
+    const user = await makeUser();
+    const rows = Array.from({ length: 205 }, (_, index) => ({
+        senderRef: { entityId: null, rawText: 'Budi Santoso' },
+        receiverRef: { entityId: null, rawText: 'Partai Maju' },
+        amountIdr: 1_000_000 + index,
+        occurredAt: new Date('2026-06-05T00:00:00Z'),
+        recordedAt: new Date('2026-06-05T00:00:00Z'),
+        channel: 'digital-form',
+        dedupKey: `cap-${index}`,
+    }));
+    await Donation.insertMany(rows);
+
+    const sent = await asParty(user, 'sender');
+    assert.equal(sent.body.data.length, 200);
+    assert.equal(sent.body.page.total, 205);
+    assert.equal(sent.body.page.shown, 200);
+    assert.equal(sent.body.page.complete, false);
+    assert.match(sent.body.page.truncated, /200 most recent of 205/);
+});
+
+test('a list that fits says it is complete', async () => {
+    const user = await makeUser();
+    await makeDonation('Budi Santoso', 'Partai Maju');
+
+    const sent = await asParty(user, 'sender');
+    assert.equal(sent.body.page.complete, true);
+    assert.equal(sent.body.page.total, 1);
+    assert.equal(sent.body.page.truncated, undefined);
+});

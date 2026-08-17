@@ -31,6 +31,34 @@ const { log } = require('../../../utils/observability/logging');
 //: many donations would now load all of them.
 const PAGE = 200;
 
+/**
+ * Say how much of the answer this is.
+ *
+ * A capped list that does not say it was capped reads as the complete set, and
+ * the reader with most to lose from that is the subject: somebody checking
+ * which donations are attributed to them would conclude the ones past the cap
+ * do not exist. Reported on every paged view, including the ones where the cap
+ * is unlikely to be reached, because "unlikely" is not a property the response
+ * can carry.
+ */
+function completeness(total, shown) {
+    return {
+        total,
+        shown,
+        complete: shown >= total,
+        ...(shown < total
+            ? {
+                  // Named rather than left to be inferred from the two numbers,
+                  // and given the remedy, since a subject who cannot see all of
+                  // their records needs to know what to do about it.
+                  truncated:
+                      `showing the ${shown} most recent of ${total}; narrow the ` +
+                      'range or ask an operator for the full set',
+              }
+            : {}),
+    };
+}
+
 function fail(res, status, message, data = {}) {
     return res.status(status).json({ status: 'error', message, data });
 }
@@ -134,7 +162,9 @@ const entities = async (req, res) => {
         // Entities merged away are excluded. One of the things a merge is for
         // is that the absorbed record stops being a second donor, and listing
         // it here would undo that for every reader of this endpoint.
-        const found = await Entity.find({ mergedInto: null })
+        const filter = { mergedInto: null };
+        const total = await Entity.countDocuments(filter);
+        const found = await Entity.find(filter)
             .select('canonicalName entityType aliases firstSeen lastSeen')
             .sort({ canonicalName: 1 })
             .limit(PAGE)
@@ -143,6 +173,7 @@ const entities = async (req, res) => {
         return res.status(200).json({
             status: 'success',
             message: 'Entities fetched successfully',
+            page: completeness(total, found.length),
             data: found.map((entity) => ({
                 name: entity.canonicalName,
                 type: entity.entityType,
@@ -167,7 +198,9 @@ const list = async (req, res) => {
         // Superseded records are excluded. A correction is a new version
         // rather than an edit, so both exist; returning both would show the
         // same donation twice, once with the value that was corrected.
-        const found = await Donation.find({ supersededBy: null })
+        const filter = { supersededBy: null };
+        const total = await Donation.countDocuments(filter);
+        const found = await Donation.find(filter)
             .sort({ occurredAt: -1 })
             .limit(PAGE)
             .lean();
@@ -176,6 +209,7 @@ const list = async (req, res) => {
         return res.status(200).json({
             status: 'success',
             message: 'Donations fetched successfully',
+            page: completeness(total, found.length),
             data: found.map((donation) => present(donation, confirmed)),
         });
     } catch (err) {
@@ -228,6 +262,7 @@ async function listAsParty(req, res, party) {
         }
         filter.supersededBy = null;
 
+        const total = await Donation.countDocuments(filter);
         const found = await Donation.find(filter)
             .sort({ occurredAt: -1 })
             .limit(PAGE)
@@ -237,6 +272,7 @@ async function listAsParty(req, res, party) {
         return res.status(200).json({
             status: 'success',
             message: `Donations as ${party} fetched successfully`,
+            page: completeness(total, found.length),
             data: found.map((donation) => present(donation, confirmed)),
             // Stated so a subject knows how firmly the system believes these
             // are theirs. A name match and a verified link are different
