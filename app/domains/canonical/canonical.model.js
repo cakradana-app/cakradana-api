@@ -144,6 +144,14 @@ donationSchema.index({ 'senderRef.entityId': 1, occurredAt: 1 });
 donationSchema.index({ 'receiverRef.entityId': 1, occurredAt: 1 });
 donationSchema.index({ electoralContext: 1, occurredAt: 1 });
 donationSchema.index({ recordedAt: 1 });
+// Both callers ask which legacy rows have a counterpart here — the backfill, to
+// know what is left to move, and the recovery check, to know whether the
+// document the service began with is still the only copy of anything. Both were
+// scanning the whole collection to find the handful of rows that answer.
+//
+// Not sparse: the field defaults to null rather than being absent, so every
+// document carries it and a sparse index would index all of them anyway.
+donationSchema.index({ legacyDonationId: 1 });
 
 const identifierSchema = new mongoose.Schema(
     {
