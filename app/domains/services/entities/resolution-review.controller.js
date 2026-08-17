@@ -19,6 +19,7 @@ const {
     ScoringEvent,
 } = require('../../canonical/canonical.model');
 const { record } = require('../../canonical/retention');
+const { EntityIdentifier } = require('../../identity/identifier.model');
 const {
     ResolutionReview,
     RESOLUTION_REVIEW_STATES,
@@ -430,6 +431,17 @@ const merge = async (req, res) => {
         if (merged.firstSeen) carried.$min = { firstSeen: merged.firstSeen };
         if (merged.lastSeen) carried.$max = { lastSeen: merged.lastSeen };
         await Entity.updateOne({ _id: survivorId }, carried);
+
+        // The surrogates moved with the entity document above; the records
+        // they point at have to move too. Left behind, the survivor lists
+        // identifiers whose backing records still name the absorbed entity, so
+        // the entity claims to be identified and the identifier store says it
+        // is not — and the two answers come from different endpoints, which is
+        // how a disagreement like that survives.
+        await EntityIdentifier.updateMany(
+            { entityId: mergedId },
+            { $set: { entityId: survivorId } },
+        );
 
         // Retained, not removed. An un-merge needs something to un-merge.
         await Entity.updateOne({ _id: mergedId }, { $set: { mergedInto: survivorId } });

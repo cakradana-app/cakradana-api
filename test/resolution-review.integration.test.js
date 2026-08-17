@@ -38,6 +38,9 @@ const {
     ResolutionReview,
     MAX_OPEN_PER_ACTOR,
 } = require('../app/domains/services/entities/resolution-review.model');
+const {
+    EntityIdentifier,
+} = require('../app/domains/identity/identifier.model');
 const controller = require('../app/domains/services/entities/resolution-review.controller');
 const { resolveEntity, normaliseName } = require('../app/domains/canonical/resolution');
 
@@ -281,6 +284,32 @@ test('the survivor carries the absorbed record’s names, registers and dates', 
     assert.equal(survivor.lastSeen.getTime(), late.getTime());
     assert.equal(survivor.mergeHistory.length, 1);
     assert.equal(survivor.mergeHistory[0].actor, ACTOR);
+});
+
+test('the identifier records move with the entity that held them', async () => {
+    // The surrogates move with the entity document. Left behind, the records
+    // they point at still name the absorbed entity, so the entity claims to be
+    // identified and the identifier store says it is not — and the two answers
+    // come from different endpoints, which is how a disagreement like that
+    // survives.
+    const observed = await makeEntity('Budi Santosa');
+    const candidate = await makeEntity('Budi Santoso');
+    const held = await EntityIdentifier.create({
+        entityId: observed._id,
+        scheme: 'nik',
+        lookupHash: 'f'.repeat(64),
+        iv: '0'.repeat(24),
+        ciphertext: 'aa',
+        tag: '0'.repeat(32),
+        recordedBy: ACTOR,
+    });
+
+    const review = await openReview(observed, candidate);
+    assert.equal((await merge(review)).status, 200);
+
+    const reread = await EntityIdentifier.findById(held._id).lean();
+    assert.equal(String(reread.entityId), String(candidate._id));
+    assert.equal(await EntityIdentifier.countDocuments({ entityId: observed._id }), 0);
 });
 
 test('the absorbed entity is kept, pointing at the survivor', async () => {
