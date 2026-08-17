@@ -43,6 +43,7 @@
 - [📚 API Documentation](#-api-documentation)
 - [🔧 Installation](#-installation)
 - [🌍 Environment Variables](#-environment-variables)
+- [🛟 Backup & Recovery](#-backup--recovery)
 - [📖 How to Use](#-how-to-use)
 - [🤝 Contributing](#-contributing)
 - [📄 License](#-license)
@@ -282,6 +283,33 @@ OPENROUTER_API_URL=https://openrouter.ai/api/v1/chat/completions
 OPENROUTER_API_KEY=
 OPENROUTER_API_MODEL=deepseek/deepseek-r1-distill-qwen-7b
 ```
+
+---
+
+## 🛟 Backup & Recovery
+
+This deployment targets **99.5% availability** in a calendar month, a **6 hour
+recovery point objective**, and a **4 hour recovery time objective**. The numbers
+are declared in `app/domains/canonical/resilience.js` with the reasoning attached
+to each one, and served with that reasoning at
+`GET /service/monitoring/resilience`.
+
+```bash
+npm run backup                                        # dump into backups/
+node scripts/restore.js --from backups/<archive>      # restore, and verify what landed
+node --test test/resilience.test.js                   # the drill: back up, restore, compare
+```
+
+The backup refuses to produce an empty archive, and the restore refuses to report
+success on a partial one — it checks the archive against its manifest before
+writing anything, and checks the database against the manifest afterwards. The
+drill runs in CI on every commit, because a recovery objective nobody has
+exercised is a claim rather than a capability.
+
+What is *not* covered — no multi-region, no automated failover, no continuous
+capture — is stated in
+[**docs/resilience.md**](docs/resilience.md), along with the procedure, the
+scheduling, and what to alert on.
 
 ---
 

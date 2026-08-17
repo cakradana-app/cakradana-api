@@ -1,0 +1,190 @@
+# Availability, backup, and recovery
+
+The objectives below are declared in code, in
+[`app/domains/canonical/resilience.js`](../app/domains/canonical/resilience.js),
+with the reasoning attached to each number. This page is the procedure. Where
+the two differ, the code is what runs.
+
+## The objectives
+
+| | Target | Why this number |
+|---|---|---|
+| **Availability** | 99.5% of a calendar month, measured on the ingestion write path and the review queue (about 3h39m of budget) | One MongoDB process and one API container. Every restart, host reboot, and database upgrade is downtime rather than a failover. The work this serves — filings arriving in batches, a queue worked by people in business hours — is not harmed by minutes of unavailability the way a payment authorisation would be. |
+| **RPO** | 6 hours | This is a full-dump deployment with no continuous capture, so the worst-case loss is exactly the interval between dumps. A lost donation is not a missing row: every cumulative rule computes over the donations it can see, so losing one *lowers* a donor's running total, an over-limit donor is cleared by the limit rules, and nothing anywhere reports an error. |
+| **RTO** | 4 hours | Recovery is a manual procedure: somebody is paged, a database is provisioned, `scripts/restore.js` runs, and its verification is read. At this data volume the restore itself is minutes — the hours are people and provisioning. |
+
+What would have to change before each could be tightened is recorded next to it
+in the module, and is served at `GET /service/monitoring/resilience` so it
+travels with the number rather than being findable only in the source.
+
+Not every lost record costs the same. A paper form or a scraped page can be
+ingested again from the source document; a digital-form submission exists
+nowhere but here, and near a filing deadline the request to file again may
+arrive after the deadline has passed.
+
+## Taking a backup
+
+```bash
+npm run backup                              # MONGODB_URI from the environment, into backups/
+node scripts/backup.js --uri "$URI" --out /var/backups/cakradana
+node scripts/backup.js --allow-empty        # only when the store really is empty
+```
+
+Each run writes a timestamped archive directory containing one `.jsonl` file per
+collection and a `manifest.json` recording what was captured, when, from which
+host and database (never the credentials), the schema version, a fingerprint
+computed from the schemas themselves, and per collection a document count, a
+file checksum, and an order-independent content digest.
+
+What is captured and why each collection cannot simply be rebuilt is listed in
+`BACKUP_SET`; what is deliberately left out, and why, is listed in
+`NOT_BACKED_UP` next to it.
+
+Two behaviours are worth knowing before relying on it:
+
+- **It refuses to produce an empty archive.** A dump against the wrong database,
+  or the right one with the wrong `authSource`, produces zero documents and exits
+  zero, and would keep doing so every six hours until somebody needed it.
+  `--allow-empty` is the way to say the emptiness is expected.
+- **An interrupted run leaves nothing that looks complete.** The archive is
+  written to a `.partial` directory and renamed only after the manifest is
+  committed.
+
+Every run — including a failed one — is recorded in the `backupruns` collection,
+which is what the health and metrics surfaces read. A run that fails and writes
+nothing would otherwise be indistinguishable from a schedule that was never
+created.
+
+### Scheduling
+
+Backups are scheduled by the operator rather than by the application process:
+the API container has no archive volume, and a dump belongs on the host that
+holds the storage. Every six hours, matching the RPO:
+
+```
+0 */6 * * *  cd /srv/cakradana-api && /usr/bin/node scripts/backup.js --out /var/backups/cakradana >> /var/log/cakradana-backup.log 2>&1
+```
+
+A schedule that was never created reports as `never` at
+`GET /service/monitoring/resilience` and as `cakradana_backup_ever_completed 0`
+in the metrics, rather than failing anywhere. That is the compensating control
+for scheduling being outside the application, and it is only a control if
+somebody alerts on it — see below.
+
+Archives are kept 30 days. They hold the same personal data the live store does
+and inherit the same handling standard, so they are not an indefinite second
+copy of political-affiliation data.
+
+## Restoring
+
+```bash
+node scripts/restore.js --from /var/backups/cakradana/20260817T060000Z --uri "$URI"
+```
+
+The procedure:
+
+1. **Provision an empty database.** The restore refuses a target that already
+   holds documents. Merging an archive into a live store produces something that
+   is neither the archive nor the store; `--force` overrides this and is for the
+   case where that is genuinely what is wanted.
+2. **Run the restore.** It verifies the archive against its manifest *before*
+   opening a connection — a half-written file inserted into an empty store is
+   harder to recognise as a bad archive than one that never reached the database.
+3. **Read the verification.** After inserting, it compares what actually landed
+   against the manifest: counts and content digests, per collection. Any mismatch
+   fails the run and prints what did not match. A restore that reports success
+   without this check is the failure this script exists to remove — inserts that
+   returned no error still leave a short collection when a file was truncated or
+   a batch hit a duplicate key, and the difference between a complete recovery
+   and one missing four hundred donations is invisible at the console.
+4. **Start the application.** The archive carries documents, not indexes.
+   Indexes are declared in the schemas and built on startup, so the first
+   minutes against a restored store are slower rather than wrong.
+5. **Run the retention pass.** Retention runs against the live store, not
+   against archives. An archive taken before a sweep reinstates the records that
+   sweep deleted. `ENFORCE_RETENTION=true` on the restored deployment, or run the
+   pass by hand.
+6. **Take a backup of the restored store.** The run history is deliberately not
+   carried across, so the recovered deployment reports `never` until it has been
+   backed up in its own right — which is true of it.
+
+To check a store against an archive at any later point, without writing to
+either:
+
+```bash
+node scripts/restore.js --from <archive> --uri "$URI" --verify-only
+```
+
+An archive taken under an older schema restores, with a warning naming both
+schema versions and fingerprints. Refusing it would leave an operator holding a
+verified archive and no way to use it.
+
+## The drill
+
+`test/resilience.test.js` performs a real backup and a real restore against a
+real mongod, and runs on every commit as the **Restore drill** stage in CI. It
+seeds a store, backs it up, restores the archive into a clean database, and
+compares what came out against what went in — types included, since a date that
+returns as a string and an amount that returns as a different number are both
+restores that "worked". It also asserts the refusals: an empty archive, a
+tampered archive, a non-empty target, a short restore, and a restore holding the
+right number of the wrong documents.
+
+It uses `mongodb-memory-server`, or whatever `RESILIENCE_TEST_URI` points at:
+
+```bash
+docker compose up -d mongodb
+RESILIENCE_TEST_URI='mongodb://admin:password@localhost:27017/?authSource=admin' \
+  node --test test/resilience.test.js
+```
+
+When no database can be reached it fails and says so. It is never skipped: a
+drill that skips is a recovery plan nobody has tested, reported as a passing
+suite.
+
+CI proves the mechanism. It does not prove the RTO, which is a claim about
+people and provisioning at production data volumes — that needs a drill against
+a production-sized store, every 30 days (`BACKUP_POLICY.drillIntervalDays`).
+
+## Watching it
+
+| Where | What |
+|---|---|
+| `GET /ready` | The declared objectives and the age of the last verified backup, under `recovery`. Reported, never enforced: `rpo_affects_readiness` is `false`, because withdrawing from rotation over a stale backup would stop the ingestion whose records are the thing at risk. |
+| `GET /metrics` | `cakradana_backup_age_seconds`, `cakradana_backup_last_success_timestamp_seconds`, `cakradana_backup_ever_completed`, and the objectives themselves as `cakradana_rpo_objective_seconds`, `cakradana_rto_objective_seconds`, `cakradana_availability_objective_ratio`. The objective gauges are emitted even when the database cannot be read, because the scrape most worth having is the one taken during an incident. |
+| `GET /service/monitoring/resilience` | The objectives with their reasoning, the backup set, the current position, and what is not covered. |
+
+The alert worth having is `cakradana_backup_age_seconds >
+cakradana_rpo_objective_seconds`, with a second one on
+`cakradana_backup_ever_completed == 0`. They are separate because they are
+different failures: a schedule that slipped, and a schedule that was never
+created.
+
+`cakradana_store_metrics_available 0` means the gauges could not be read, which
+is not the same as a breach and must not page the same person for the same
+reason.
+
+## What is not covered
+
+Stated plainly, because the gap between "there are backups" and "we can recover"
+is where recovery plans usually fail, and leaving it unmentioned does not close
+it.
+
+- **No multi-region deployment.** Losing the hosting region is outside these
+  objectives entirely. Neither the RPO nor the RTO describes that case.
+- **No automated failover, and no standby.** Every recovery starts with a person
+  being paged. The RTO is written around that and cannot be lower while it is
+  true.
+- **No continuous capture.** The RPO is bounded by the dump interval and nothing
+  else. A replica set with oplog capture would bound it in seconds; there is no
+  replica set.
+- **Backups are scheduled outside the application.** A schedule that was never
+  created is visible in the health and metrics surfaces and nowhere else. If
+  nobody alerts on those, this reduces to a documented intention.
+- **Archives are not encrypted by this tooling.** They hold political-affiliation
+  data and rely on the storage they are written to for confidentiality. Writing
+  them somewhere with encryption at rest and access control is part of deploying
+  this, not part of running the script.
+- **The published dataset and the legacy singleton are not backed up.** Both are
+  derived from what is, and restoring a stale copy of a published view would
+  republish figures that may since have been corrected.
